@@ -920,6 +920,11 @@ bool HaveOverlappingKeyRanges(const Comparator* c, const SstFileMetaData& a,
 Status CompactionPicker::SanitizeCompactionInputFilesForAllLevels(
     std::unordered_set<uint64_t>* input_files,
     const ColumnFamilyMetaData& cf_meta, const int output_level) const {
+  // There is no need to sanitize the input files since L0 is non-overlapping
+  if (output_level == 0) {
+    return Status::OK();
+  }
+
   auto& levels = cf_meta.levels;
   auto comparator = icmp_->user_comparator();
 
