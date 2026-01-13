@@ -667,37 +667,39 @@ class IterKey {
       key_slices_[next_key_slice_index++] = Slice(kTsMin, ts_sz);
     } else {
       assert(shared_len + non_shared_len >= kNumInternalBytes);
-      // Invaraint: shared_user_key_len + shared_internal_bytes_len = shared_len
-      // In naming below `*_len` variables, keyword `user_key` refers to the
-      // user key part of the existing key in `key_` as apposed to the new key.
-      // Similary, `internal_bytes` refers to the footer part of the existing
-      // key. These bytes potentially will move between user key part and the
-      // footer part in the new key.
+
+      // Non-user keys are more complicated because the timestamp must be added
+      // between the user key and the internal bytes (i.e. key footer). In
+      // addition shared_len can pass into the internal bytes boundary.
+      //
+      // With delta encoding we can split the key into multiple parts
+      //
+      // [shared_user_key][shared_internal_bytes][non_shared]
+      //
+      // When we append the timestamp, it will look like this
+      //
+      // [shared_user_key][non_shared_user_key][ts][shared_internal_bytes][non_shared_internal_bytes]
+
       const size_t user_key_len = key_size_ - kNumInternalBytes;
       const size_t sharable_user_key_len = user_key_len - ts_sz;
+
       const size_t shared_user_key_len =
           std::min(shared_len, sharable_user_key_len);
+      const size_t non_shared_user_key_len =
+          sharable_user_key_len - shared_user_key_len;
       const size_t shared_internal_bytes_len = shared_len - shared_user_key_len;
+      const size_t non_shared_internal_bytes_len =
+          kNumInternalBytes - shared_internal_bytes_len;
 
-      // One Slice among the three Slices will get split into two Slices, plus
-      // a timestamp slice.
-      bool ts_added = false;
-      // Add slice parts and find the right location to add the min timestamp.
-      MaybeAddKeyPartsWithTimestamp(
-          key_, shared_user_key_len,
-          shared_internal_bytes_len + non_shared_len < kNumInternalBytes,
-          shared_len + non_shared_len - kNumInternalBytes, ts_sz,
-          &next_key_slice_index, &ts_added);
-      MaybeAddKeyPartsWithTimestamp(
-          key_ + user_key_len, shared_internal_bytes_len,
-          non_shared_len < kNumInternalBytes,
-          shared_internal_bytes_len + non_shared_len - kNumInternalBytes, ts_sz,
-          &next_key_slice_index, &ts_added);
-      MaybeAddKeyPartsWithTimestamp(non_shared_data, non_shared_len,
-                                    non_shared_len >= kNumInternalBytes,
-                                    non_shared_len - kNumInternalBytes, ts_sz,
-                                    &next_key_slice_index, &ts_added);
-      assert(ts_added);
+      key_slices_[next_key_slice_index++] = Slice(key_, shared_user_key_len);
+      key_slices_[next_key_slice_index++] =
+          Slice(non_shared_data, non_shared_user_key_len);
+      key_slices_[next_key_slice_index++] = Slice(kTsMin, ts_sz);
+      key_slices_[next_key_slice_index++] =
+          Slice(key_ + user_key_len, shared_internal_bytes_len);
+      key_slices_[next_key_slice_index++] =
+          Slice(non_shared_data + non_shared_user_key_len,
+                non_shared_internal_bytes_len);
     }
     SetKeyImpl(next_key_slice_index,
                /* total_bytes= */ shared_len + non_shared_len + ts_sz);
@@ -940,25 +942,6 @@ class IterKey {
   void EnlargeSecondaryBufferIfNeeded(size_t key_size);
 
   void EnlargeBuffer(size_t key_size);
-
-  void MaybeAddKeyPartsWithTimestamp(const char* slice_data,
-                                     const size_t slice_sz, bool add_timestamp,
-                                     const size_t left_sz, const size_t ts_sz,
-                                     size_t* next_key_slice_idx,
-                                     bool* ts_added) {
-    assert(next_key_slice_idx);
-    if (add_timestamp && !*ts_added) {
-      assert(slice_sz >= left_sz);
-      key_slices_[(*next_key_slice_idx)++] = Slice(slice_data, left_sz);
-      key_slices_[(*next_key_slice_idx)++] = Slice(kTsMin, ts_sz);
-      key_slices_[(*next_key_slice_idx)++] =
-          Slice(slice_data + left_sz, slice_sz - left_sz);
-      *ts_added = true;
-    } else {
-      key_slices_[(*next_key_slice_idx)++] = Slice(slice_data, slice_sz);
-    }
-    assert(*next_key_slice_idx <= 5);
-  }
 };
 
 // Convert from a SliceTransform of user keys, to a SliceTransform of
