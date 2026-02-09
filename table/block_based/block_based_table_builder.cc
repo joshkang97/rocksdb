@@ -113,9 +113,9 @@ FilterBlockBuilder* CreateFilterBlockBuilder(
 // A convenience function for populating the Compressor* fields; see ~Rep()
 Compressor* MaybeCloneSpecialized(
     Compressor* compressor, CacheEntryRole block_type,
-    Compressor::DictSampleArgs&& dict_samples = {}) {
+    Compressor::DictConfigArgs&& dict_config = Compressor::DictDisabled{}) {
   auto specialized =
-      compressor->MaybeCloneSpecialized(block_type, std::move(dict_samples));
+      compressor->MaybeCloneSpecialized(block_type, std::move(dict_config));
   if (specialized) {
     // Caller is responsible for freeing when distinct
     return specialized.release();
@@ -833,7 +833,8 @@ struct BlockBasedTableBuilder::Rep {
   RelaxedAtomic<uint64_t> sampled_output_fast_data_bytes{0};
   uint32_t compression_parallel_threads;
   int max_compressed_bytes_per_kb;
-  size_t max_dict_sample_bytes = 0;
+  // Dictionary guidance for data blocks (from GetDictGuidance())
+  Compressor::DictConfig data_block_dict_guidance;
 
   // *** Compressors & decompressors - Yes, it seems like a lot here but ***
   // *** these are distinct fields to minimize extra conditionals and    ***
@@ -842,6 +843,9 @@ struct BlockBasedTableBuilder::Rep {
 
   // A compressor for blocks in general, without dictionary compression
   std::unique_ptr<Compressor> basic_compressor;
+  // Built-in compressors for compression size sampling
+  std::unique_ptr<Compressor> fast_sample_compressor;
+  std::unique_ptr<Compressor> slow_sample_compressor;
   // A compressor for data blocks, which might be tuned differently and might
   // use dictionary compression (when applicable). See ~Rep() for some details.
   UnownedPtr<Compressor> data_block_compressor = nullptr;
@@ -1119,9 +1123,12 @@ struct BlockBasedTableBuilder::Rep {
         index_block_working_area.compress =
             index_block_compressor->ObtainWorkingArea();
       }
-      max_dict_sample_bytes = basic_compressor->GetMaxSampleSizeIfWantDict(
-          CacheEntryRole::kDataBlock);
-      if (max_dict_sample_bytes > 0) {
+      data_block_dict_guidance =
+          basic_compressor->GetDictGuidance(CacheEntryRole::kDataBlock);
+      if (auto* sampling =
+              std::get_if<Compressor::DictSampling>(&data_block_dict_guidance);
+          sampling != nullptr && sampling->max_sample_bytes > 0) {
+        // Sampling mode: collect samples up to max_sample_bytes
         state = State::kBuffered;
         if (tbo.target_file_size == 0) {
           buffer_limit = tbo.compression_opts.max_dict_buffer_bytes;
@@ -1131,7 +1138,22 @@ struct BlockBasedTableBuilder::Rep {
           buffer_limit = std::min(tbo.target_file_size,
                                   tbo.compression_opts.max_dict_buffer_bytes);
         }
+      } else if (auto* predef = std::get_if<Compressor::DictPreDefined>(
+                     &data_block_dict_guidance);
+                 predef != nullptr && !predef->dict_data.empty()) {
+        // Pre-defined dictionary mode: use it immediately, no buffering
+        data_block_compressor = MaybeCloneSpecialized(
+            basic_compressor.get(), CacheEntryRole::kDataBlock,
+            Compressor::DictPreDefined{std::string{predef->dict_data}});
+        data_block_working_area.compress =
+            data_block_compressor->ObtainWorkingArea();
       } else {
+        assert(std::holds_alternative<Compressor::DictSampling>(
+                   data_block_dict_guidance) ||
+               std::holds_alternative<Compressor::DictPreDefined>(
+                   data_block_dict_guidance) ||
+               std::holds_alternative<Compressor::DictDisabled>(
+                   data_block_dict_guidance));
         // No distinct data block compressor using dictionary, but
         // implementation might still want to specialize for data blocks
         data_block_compressor = MaybeCloneSpecialized(
@@ -1161,6 +1183,23 @@ struct BlockBasedTableBuilder::Rep {
                   data_block_compressor->GetPreferredCompressionType());
         }
       }
+    }
+
+    if (sample_for_compression > 0) {
+      auto builtin = GetBuiltinCompressionManager(
+          GetCompressFormatForVersion(table_opt.format_version));
+      if (builtin->SupportsCompressionType(kLZ4Compression)) {
+        fast_sample_compressor = builtin->GetCompressor({}, kLZ4Compression);
+      } else if (builtin->SupportsCompressionType(kSnappyCompression)) {
+        fast_sample_compressor = builtin->GetCompressor({}, kSnappyCompression);
+      }
+      if (builtin->SupportsCompressionType(kZSTD)) {
+        slow_sample_compressor = builtin->GetCompressor({}, kZSTD);
+      } else if (builtin->SupportsCompressionType(kZlibCompression)) {
+        slow_sample_compressor = builtin->GetCompressor({}, kZlibCompression);
+      }
+      // NOTE: even if both sampling compressors are nullptr, we still populate
+      // the table properties with placeholder info
     }
 
     switch (table_options.prepopulate_block_cache) {
@@ -1586,51 +1625,43 @@ void BlockBasedTableBuilder::Flush(const Slice* first_key_in_next_block) {
   if (r->sample_for_compression > 0 &&
       Random::GetTLSInstance()->OneIn(
           static_cast<int>(r->sample_for_compression))) {
-    std::string sampled_output_fast;
-    std::string sampled_output_slow;
+    GrowableBuffer sampled_output;
+    sampled_output.ResetForSize(uncompressed_block_data.size());
+    size_t fast_size = uncompressed_block_data.size();
+    size_t slow_size = uncompressed_block_data.size();
 
     // Sampling with a fast compression algorithm
-    if (LZ4_Supported() || Snappy_Supported()) {
-      CompressionType c =
-          LZ4_Supported() ? kLZ4Compression : kSnappyCompression;
-      CompressionOptions options;
-      CompressionContext context(c, options);
-      CompressionInfo info_tmp(options, context,
-                               CompressionDict::GetEmptyDict(), c);
-
-      OLD_CompressData(
-          uncompressed_block_data, info_tmp,
-          GetCompressFormatForVersion(r->table_options.format_version),
-          &sampled_output_fast);
+    if (r->fast_sample_compressor) {
+      CompressionType result_type = kNoCompression;
+      Status s = r->fast_sample_compressor->CompressBlock(
+          uncompressed_block_data, sampled_output.data(), &fast_size,
+          &result_type, /*working_area=*/nullptr);
+      if (!s.ok() || result_type == kNoCompression) {
+        // For accounting, fall back on no compression
+        fast_size = uncompressed_block_data.size();
+      }
     }
 
     // Sampling with a slow but high-compression algorithm
-    if (ZSTD_Supported() || Zlib_Supported()) {
-      CompressionType c = ZSTD_Supported() ? kZSTD : kZlibCompression;
-      CompressionOptions options;
-      CompressionContext context(c, options);
-      CompressionInfo info_tmp(options, context,
-                               CompressionDict::GetEmptyDict(), c);
-
-      OLD_CompressData(
-          uncompressed_block_data, info_tmp,
-          GetCompressFormatForVersion(r->table_options.format_version),
-          &sampled_output_slow);
+    if (r->slow_sample_compressor) {
+      CompressionType result_type = kNoCompression;
+      Status s = r->slow_sample_compressor->CompressBlock(
+          uncompressed_block_data, sampled_output.data(), &slow_size,
+          &result_type, /*working_area=*/nullptr);
+      if (!s.ok() || result_type == kNoCompression) {
+        // For accounting, fall back on no compression
+        slow_size = uncompressed_block_data.size();
+      }
     }
 
-    if (sampled_output_slow.size() > 0 || sampled_output_fast.size() > 0) {
-      // Currently compression sampling is only enabled for data block.
-      r->sampled_input_data_bytes.FetchAddRelaxed(
-          uncompressed_block_data.size());
-      r->sampled_output_slow_data_bytes.FetchAddRelaxed(
-          sampled_output_slow.size());
-      r->sampled_output_fast_data_bytes.FetchAddRelaxed(
-          sampled_output_fast.size());
-    }
+    // NOTE: Currently compression sampling is only enabled for data block.
+    r->sampled_input_data_bytes.FetchAddRelaxed(uncompressed_block_data.size());
+    r->sampled_output_slow_data_bytes.FetchAddRelaxed(slow_size);
+    r->sampled_output_fast_data_bytes.FetchAddRelaxed(fast_size);
 
-    NotifyCollectTableCollectorsOnBlockAdd(
-        r->table_properties_collectors, uncompressed_block_data.size(),
-        sampled_output_slow.size(), sampled_output_fast.size());
+    NotifyCollectTableCollectorsOnBlockAdd(r->table_properties_collectors,
+                                           uncompressed_block_data.size(),
+                                           slow_size, fast_size);
   } else {
     NotifyCollectTableCollectorsOnBlockAdd(
         r->table_properties_collectors, uncompressed_block_data.size(),
@@ -1910,6 +1941,10 @@ Status BlockBasedTableBuilder::CompressAndVerifyBlock(
       assert(type == kNoCompression || status.ok());
       assert(type == kNoCompression ||
              r->table_options.verify_compression == (verify_decomp != nullptr));
+
+      TEST_SYNC_POINT_CALLBACK(
+          "BlockBasedTableBuilder::CompressAndVerifyBlock:TamperWithResultType",
+          &type);
 
       // Some of the compression algorithms are known to be unreliable. If
       // the verify_compression flag is set then try to de-compress the
@@ -2616,14 +2651,18 @@ void BlockBasedTableBuilder::MaybeEnterUnbuffered(
       kPrimeGenerator % static_cast<uint64_t>(kNumBlocksBuffered));
   const size_t kInitSampleIdx = kNumBlocksBuffered / 2;
 
-  Compressor::DictSampleArgs samples;
+  Compressor::DictSamples samples;
   size_t buffer_idx = kInitSampleIdx;
-  for (size_t i = 0; i < kNumBlocksBuffered &&
-                     samples.sample_data.size() < r->max_dict_sample_bytes;
+  // Get max_sample_bytes from the DictSampling guidance
+  auto* sampling =
+      std::get_if<Compressor::DictSampling>(&r->data_block_dict_guidance);
+  assert(sampling != nullptr);
+  size_t max_sample_bytes = sampling->max_sample_bytes;
+  for (size_t i = 0;
+       i < kNumBlocksBuffered && samples.sample_data.size() < max_sample_bytes;
        ++i) {
-    size_t copy_len =
-        std::min(r->max_dict_sample_bytes - samples.sample_data.size(),
-                 r->data_block_buffers[buffer_idx].size());
+    size_t copy_len = std::min(max_sample_bytes - samples.sample_data.size(),
+                               r->data_block_buffers[buffer_idx].size());
     samples.sample_data.append(r->data_block_buffers[buffer_idx], 0, copy_len);
     samples.sample_lens.emplace_back(copy_len);
 
