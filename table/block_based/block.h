@@ -622,19 +622,27 @@ class BlockIter : public InternalIteratorBase<TValue> {
     }
   }
 
-  // Returns the result of `Comparator::Compare()`, where the appropriate
-  // comparator is used for the block contents, the LHS argument is the current
-  // key with global seqno applied, and the RHS argument is `other`.
-  int CompareCurrentKey(const Slice& other) {
+  // Compares two keys using the appropriate comparator for the block contents.
+  // Uses user comparator when the block stores user keys, otherwise uses the
+  // internal key comparator. When global_seqno is not disabled, applies it to
+  // the LHS key for comparison.
+  int CompareKey(const Slice& a, const Slice& b) {
     assert(icmp_.user_comparator() != nullptr);
     if (raw_key_.IsUserKey()) {
       assert(global_seqno_ == kDisableGlobalSequenceNumber);
-      return icmp_.user_comparator()->Compare(raw_key_.GetUserKey(), other);
+      return icmp_.user_comparator()->Compare(a, b);
     } else if (global_seqno_ == kDisableGlobalSequenceNumber) {
-      return icmp_.Compare(raw_key_.GetInternalKey(), other);
+      return icmp_.Compare(a, b);
     }
-    return icmp_.Compare(raw_key_.GetInternalKey(), global_seqno_, other,
-                         kDisableGlobalSequenceNumber);
+    return icmp_.Compare(a, global_seqno_, b, kDisableGlobalSequenceNumber);
+  }
+
+  // Compares the current key (with global seqno applied) against `other`.
+  int CompareCurrentKey(const Slice& other) {
+    if (raw_key_.IsUserKey()) {
+      return CompareKey(raw_key_.GetUserKey(), other);
+    }
+    return CompareKey(raw_key_.GetInternalKey(), other);
   }
 
  private:

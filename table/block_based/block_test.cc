@@ -583,7 +583,7 @@ class IndexBlockTest
       public testing::WithParamInterface<
           std::tuple<bool, bool, bool, test::UserDefinedTimestampTestMode,
                      BlockBasedTableOptions::IndexSearchType, int, int, int,
-                     KeyDistribution>> {
+                     int, KeyDistribution>> {
  public:
   IndexBlockTest() = default;
 
@@ -601,11 +601,12 @@ class IndexBlockTest
                           : std::get<4>(GetParam());
   }
   int numRecords() const {
-    return std::min(2 >> keyLength(), std::get<5>(GetParam()));
+    return std::min(1 << keyLength(), std::get<5>(GetParam()));
   }
-  int keyLength() const { return std::get<6>(GetParam()); }
-  int prefixLength() const { return std::get<7>(GetParam()); }
-  KeyDistribution keyDistribution() const { return std::get<8>(GetParam()); }
+  int indexBlockRestartInterval() const { return std::get<6>(GetParam()); }
+  int keyLength() const { return std::get<7>(GetParam()); }
+  int prefixLength() const { return std::get<8>(GetParam()); }
+  KeyDistribution keyDistribution() const { return std::get<9>(GetParam()); }
 };
 
 // Similar to GenerateRandomKVs but for index block contents. Keys always
@@ -673,7 +674,8 @@ TEST_P(IndexBlockTest, IndexValueEncodingTest) {
   std::vector<BlockHandle> block_handles;
   std::vector<std::string> first_keys;
   const bool kUseDeltaEncoding = true;
-  BlockBuilder builder(16, kUseDeltaEncoding, useValueDeltaEncoding(),
+  BlockBuilder builder(indexBlockRestartInterval(), kUseDeltaEncoding,
+                       useValueDeltaEncoding(),
                        BlockBasedTableOptions::kDataBlockBinarySearch,
                        0.75 /* data_block_hash_table_util_ratio */, ts_sz,
                        shouldPersistUDT(), !keyIncludesSeq());
@@ -798,6 +800,7 @@ INSTANTIATE_TEST_CASE_P(
             BlockBasedTableOptions::IndexSearchType::kBinary,
             BlockBasedTableOptions::IndexSearchType::kInterpolation),
         ::testing::Values(1, 100),    // num_records
+        ::testing::Values(1, 16),     // index_block_restart_interval
         ::testing::Values(1, 8, 12),  // key_length
         ::testing::Values(0, 50),     // prefix_length
         ::testing::Values(KeyDistribution::kUniform,

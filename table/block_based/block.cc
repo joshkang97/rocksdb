@@ -155,7 +155,11 @@ struct DecodeEntryV4 {
 // Read first 8 bytes (starting at offset) as big-endian uint64_t, padding
 // with zeros on the right if the key is shorter. This preserves
 // lexicographic ordering.
-static uint64_t ReadBe64(const Slice& s, size_t offset = 0) {
+static uint64_t ReadBe64(Slice s, bool is_user_key, size_t offset) {
+  if (!is_user_key) {
+    assert(s.size() >= kNumInternalBytes);
+    s = Slice(s.data(), s.size() - kNumInternalBytes);
+  }
   uint64_t val = 0;
   offset = std::min(offset, s.size());
   size_t len = std::min(s.size() - offset, size_t{8});
@@ -530,12 +534,7 @@ template <typename DecodeKeyFunc>
 bool IndexBlockIter::FindRestartPointForSeek(const Slice& seek_key,
                                              uint32_t* index,
                                              bool* skip_linear_scan) {
-  // Interpolation search implementation currently does not factor in
-  // sequence numbers in keys. Rare, but possible when a single user key
-  // spans multiple blocks. If this was the case, then there is also a
-  // good chance the data is not uniform either.
-  if (index_search_type_ == BlockBasedTableOptions::kBinary ||
-      !raw_key_.IsUserKey()) {
+  if (index_search_type_ == BlockBasedTableOptions::kBinary) {
     return BinarySeekRestartPointIndex<DecodeKeyFunc>(seek_key, index,
                                                       skip_linear_scan);
   }
@@ -944,16 +943,17 @@ bool BlockIter<TValue>::BinarySeekRestartPointIndex(const Slice& target,
   return true;
 }
 
-// Searches in restart array using interpolation search (with binary search
-// fallback) to find the starting restart point for the linear scan, and stores
-// it in `*index`. Assumes restart array does not contain duplicate keys.
+// Similar effects to BinarySeekRestartPointIndex, except it uses a different
+// algorithm to search for the restart point index (i.e. interpolation search).
+// Interpolation search is typically more efficient for uniformly distributed
+// datasets.
 //
-// It is guaranteed that the restart key at `*index + 1`
-// is strictly greater than `target` or does not exist (this can be used to
-// elide a comparison when linear scan reaches all the way to the next restart
-// key). Furthermore, `*skip_linear_scan` is set to indicate whether the
-// `*index`th restart key is the final result so that key does not need to be
-// compared again later.
+// Typically, interpolation search requires an integer "value". But because we
+// are searching through variable length binary slices, we must estimate an
+// integer value for each key. Currently, the value is set to be the first 8
+// bytes (read big-endian) that do not share a prefix with the start and end
+// key. As a side effect, this can really only be used with the
+// BytewiseComparator().
 template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
@@ -965,9 +965,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
   }
 
   *skip_linear_scan = false;
-  assert(ts_sz_ == 0);
   assert(icmp_.user_comparator() == BytewiseComparator());
-  assert(raw_key_.IsUserKey());
 
   int64_t left = -1;
   int64_t right = num_restarts_ - 1;
@@ -1024,9 +1022,9 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
       } else {
         size_t spl = static_cast<size_t>(shared_prefix_len);
         assert(spl <= left_key.size() && spl <= right_key.size());
-        uint64_t left_val = ReadBe64(left_key, spl);
-        uint64_t right_val = ReadBe64(right_key, spl);
-        uint64_t target_val = ReadBe64(target, spl);
+        uint64_t left_val = ReadBe64(left_key, raw_key_.IsUserKey(), spl);
+        uint64_t right_val = ReadBe64(right_key, raw_key_.IsUserKey(), spl);
+        uint64_t target_val = ReadBe64(target, raw_key_.IsUserKey(), spl);
 
         if (left_val > right_val) {
           CorruptionError("left key is greater than right key");
@@ -1038,13 +1036,13 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
         if (target_val < left_val) {
           assert(first_iter);
-          assert(icmp_.user_comparator()->Compare(target, left_key) < 0);
+          assert(CompareKey(target, left_key) < 0);
           lte_left = true;
         } else if (target_val == left_val) {
           // target_val == left_val doesn't imply target == left_key
-          // because ReadBe64 only reads 8 bytes. We need to check actual key
-          // order.
-          if (icmp_.user_comparator()->Compare(target, left_key) <= 0) {
+          // because ReadBe64 only reads 8 bytes and skips sequence numbers. We
+          // need to check actual key order.
+          if (CompareKey(target, left_key) <= 0) {
             assert(first_iter);
             lte_left = true;
           } else {
@@ -1059,7 +1057,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
           if (target_val > right_val) {
             // note that we only ever guarantee arr[target] < arr[right + 1], so
             // it is possible to end up here even on non-first iteration
-            assert(icmp_.user_comparator()->Compare(target, right_key) > 0);
+            assert(CompareKey(target, right_key) > 0);
             gt_right = true;
           } else if (right_val == left_val) {
             // cannot divide by 0
@@ -1098,6 +1096,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
           int64_t range = right - usable_left;
           int64_t offset = static_cast<int64_t>(range * ratio);
 #endif
+          left = usable_left;  // can reduce search space by 1
           mid = usable_left + offset;
           assert(mid <= right);
           if (mid == usable_left) {
