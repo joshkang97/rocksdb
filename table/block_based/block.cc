@@ -959,6 +959,7 @@ template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
     const Slice& target, uint32_t* index, bool* skip_linear_scan) {
   static constexpr int64_t kGuardLen = 8;
+  static constexpr uint64_t kMaxPoorSearches = 8;
 
   if (restarts_ == 0) {
     return false;
@@ -980,6 +981,11 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
   bool first_iter = true;
 #endif
 
+  // A poor search is when less than half the search space is reduced, because
+  // binary search would do better. When there are kMaxPoorSearches in a row,
+  // then fallback to binary search. This helps bound worse cast performance.
+  uint64_t continuous_poor_searches = 0;
+
   // Loop invariants while not first iteration AND seek has not failed:
   // - arr[usable_left] = left_key, arr[right] = right_key
   // - left < mid <= right, and arr[left] < target < arr[right + 1]
@@ -988,6 +994,11 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
   // bounds, and whether target is within those bounds
   while (left != right) {
     int64_t mid = 0;
+
+    // If either search window is small or we've bad numerous bad guesses, then
+    // fallback to binary search
+    seek_failed = (right - left <= kGuardLen) ||
+                  continuous_poor_searches >= kMaxPoorSearches;
 
     if (!seek_failed) {
       // Interpolation seek reads left and right boundaries anyways, so we can
@@ -1016,93 +1027,83 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
       }
       assert(shared_prefix_len >= 0);
 
-      if (right - usable_left <= kGuardLen) {
-        // Search window is small, fall back to binary search.
-        seek_failed = true;
-      } else {
-        size_t spl = static_cast<size_t>(shared_prefix_len);
-        assert(spl <= left_key.size() && spl <= right_key.size());
-        uint64_t left_val = ReadBe64(left_key, raw_key_.IsUserKey(), spl);
-        uint64_t right_val = ReadBe64(right_key, raw_key_.IsUserKey(), spl);
-        uint64_t target_val = ReadBe64(target, raw_key_.IsUserKey(), spl);
+      size_t spl = static_cast<size_t>(shared_prefix_len);
+      assert(spl <= left_key.size() && spl <= right_key.size());
+      uint64_t left_val = ReadBe64(left_key, raw_key_.IsUserKey(), spl);
+      uint64_t right_val = ReadBe64(right_key, raw_key_.IsUserKey(), spl);
+      uint64_t target_val = ReadBe64(target, raw_key_.IsUserKey(), spl);
 
-        if (left_val > right_val) {
-          CorruptionError("left key is greater than right key");
-          return false;
-        }
+      if (left_val > right_val) {
+        CorruptionError("left key is greater than right key");
+        return false;
+      }
 
-        bool lte_left = false;
-        bool gt_right = false;
+      bool lte_left = false;
+      bool gt_right = false;
 
-        if (target_val < left_val) {
+      if (target_val < left_val) {
+        assert(first_iter);
+        assert(CompareKey(target, left_key) < 0);
+        lte_left = true;
+      } else if (target_val == left_val) {
+        // target_val == left_val doesn't imply target == left_key
+        // because ReadBe64 only reads 8 bytes and skips sequence numbers. We
+        // need to check actual key order.
+        if (CompareKey(target, left_key) <= 0) {
           assert(first_iter);
-          assert(CompareKey(target, left_key) < 0);
           lte_left = true;
-        } else if (target_val == left_val) {
-          // target_val == left_val doesn't imply target == left_key
-          // because ReadBe64 only reads 8 bytes and skips sequence numbers. We
-          // need to check actual key order.
-          if (CompareKey(target, left_key) <= 0) {
-            assert(first_iter);
-            lte_left = true;
-          } else {
-            // target > left, which might not be distinguishable with
-            // interpolation search with 8 bytes of sensitivity, so fallback to
-            // binary search
-            seek_failed = true;
-          }
         }
+      }
 
-        if (!lte_left && !seek_failed) {
-          if (target_val > right_val) {
-            // note that we only ever guarantee arr[target] < arr[right + 1], so
-            // it is possible to end up here even on non-first iteration
-            assert(CompareKey(target, right_key) > 0);
-            gt_right = true;
-          } else if (right_val == left_val) {
-            // cannot divide by 0
-            seek_failed = true;
-          }
+      if (!lte_left && !seek_failed) {
+        if (target_val > right_val) {
+          // note that we only ever guarantee arr[target] < arr[right + 1], so
+          // it is possible to end up here even on non-first iteration
+          assert(CompareKey(target, right_key) > 0);
+          gt_right = true;
+        } else if (right_val == left_val) {
+          // cannot divide by 0
+          seek_failed = true;
         }
+      }
 
-        // early exit if key is not within bounds
-        if (lte_left) {
-          assert(!seek_failed);
-          UpdateRawKeyAndMaybePadMinTimestamp(left_key);
-          assert(CompareCurrentKey(target) >= 0);
-          *skip_linear_scan = true;
-          *index = static_cast<uint32_t>(usable_left);
-          return true;
-        }
-        if (gt_right) {
-          assert(!seek_failed);
-          UpdateRawKeyAndMaybePadMinTimestamp(right_key);
-          assert(CompareCurrentKey(target) < 0);
-          *index = static_cast<uint32_t>(right);
-          return true;
-        }
+      // early exit if key is not within bounds
+      if (lte_left) {
+        assert(!seek_failed);
+        UpdateRawKeyAndMaybePadMinTimestamp(left_key);
+        assert(CompareCurrentKey(target) >= 0);
+        *skip_linear_scan = true;
+        *index = static_cast<uint32_t>(usable_left);
+        return true;
+      }
+      if (gt_right) {
+        assert(!seek_failed);
+        UpdateRawKeyAndMaybePadMinTimestamp(right_key);
+        assert(CompareCurrentKey(target) < 0);
+        *index = static_cast<uint32_t>(right);
+        return true;
+      }
 
-        if (!seek_failed) {
+      if (!seek_failed) {
 #ifdef HAVE_UINT128_EXTENSION
-          __uint128_t range = right - usable_left;
-          __uint128_t target_delta = target_val - left_val;
-          uint64_t range_delta = right_val - left_val;
-          int64_t offset =
-              static_cast<int64_t>(range * target_delta / range_delta);
+        __uint128_t range = right - usable_left;
+        __uint128_t target_delta = target_val - left_val;
+        uint64_t range_delta = right_val - left_val;
+        int64_t offset =
+            static_cast<int64_t>(range * target_delta / range_delta);
 #else
-          double ratio = static_cast<double>(target_val - left_val) /
-                         static_cast<double>(right_val - left_val);
-          assert(0 <= ratio && ratio <= 1);
-          int64_t range = right - usable_left;
-          int64_t offset = static_cast<int64_t>(range * ratio);
+        double ratio = static_cast<double>(target_val - left_val) /
+                       static_cast<double>(right_val - left_val);
+        assert(0 <= ratio && ratio <= 1);
+        int64_t range = right - usable_left;
+        int64_t offset = static_cast<int64_t>(range * ratio);
 #endif
-          left = usable_left;  // can reduce search space by 1
-          mid = usable_left + offset;
-          assert(mid <= right);
-          if (mid == usable_left) {
-            // this is to guarantee progress and avoid infinite loop
-            ++mid;
-          }
+        left = usable_left;  // can reduce search space by 1
+        mid = usable_left + offset;
+        assert(mid <= right);
+        if (mid == usable_left) {
+          // this is to guarantee progress and avoid infinite loop
+          ++mid;
         }
       }
     }
@@ -1122,6 +1123,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
     UpdateRawKeyAndMaybePadMinTimestamp(mid_key);
 
     int cmp = CompareCurrentKey(target);
+
+    int64_t previous_search_space = right - left;
     if (cmp < 0) {
       left = mid;
       left_key = mid_key;
@@ -1136,6 +1139,15 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
     } else {
       *skip_linear_scan = true;
       left = right = mid;
+    }
+
+    // If seach space is not reduced by at least half, good chance this data is
+    // not uniform.
+    int64_t new_search_space = right - left;
+    if (new_search_space > previous_search_space / 2) {
+      ++continuous_poor_searches;
+    } else {
+      continuous_poor_searches = 0;
     }
 
 #ifndef NDEBUG
