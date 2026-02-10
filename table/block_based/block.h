@@ -16,7 +16,6 @@
 
 #include "db/kv_checksum.h"
 #include "db/pinned_iterators_manager.h"
-#include "monitoring/perf_context_imp.h"
 #include "port/malloc.h"
 #include "rocksdb/advanced_cache.h"
 #include "rocksdb/iterator.h"
@@ -629,9 +628,6 @@ class BlockIter : public InternalIteratorBase<TValue> {
   int CompareCurrentKey(const Slice& other) {
     assert(icmp_.user_comparator() != nullptr);
     if (raw_key_.IsUserKey()) {
-      // Need to add this counter here because .user_comparator() points to the
-      // raw comparator and not the wrapper than increments this counter.
-      PERF_COUNTER_ADD(user_key_comparison_count, 1);
       assert(global_seqno_ == kDisableGlobalSequenceNumber);
       return icmp_.user_comparator()->Compare(raw_key_.GetUserKey(), other);
     } else if (global_seqno_ == kDisableGlobalSequenceNumber) {
@@ -675,9 +671,14 @@ class BlockIter : public InternalIteratorBase<TValue> {
   template <typename DecodeKeyFunc>
   inline bool GetRestartKey(uint32_t index, Slice* key);
 
-  template <typename DecodeKeyFunc, typename SeekFunc>
-  inline bool FindRestartPointIndex(const Slice& target, uint32_t* index,
-                                    bool* is_index_key_result);
+  template <typename DecodeKeyFunc>
+  inline bool BinarySeekRestartPointIndex(const Slice& target, uint32_t* index,
+                                          bool* is_index_key_result);
+
+  template <typename DecodeKeyFunc>
+  inline bool InterpolationSeekRestartPointIndex(const Slice& target,
+                                                 uint32_t* index,
+                                                 bool* is_index_key_result);
 
   // Find the first key in restart interval `index` that is >= `target`.
   // If there is no such key, iterator is positioned at the first key in
@@ -968,6 +969,10 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
                             uint32_t left, uint32_t right, uint32_t* index,
                             bool* prefix_may_exist);
   inline int CompareBlockKey(uint32_t block_index, const Slice& target);
+
+  template <typename DecodeKeyFunc>
+  bool FindRestartPointForSeek(const Slice& seek_key, uint32_t* index,
+                               bool* skip_linear_scan);
 
   inline bool ParseNextIndexKey();
 

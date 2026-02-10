@@ -7016,6 +7016,44 @@ class DataBlockIndexTypeJni {
   }
 };
 
+// The portal class for org.rocksdb.IndexSearchType
+class IndexSearchTypeJni {
+ public:
+  // Returns the equivalent org.rocksdb.IndexSearchType for the provided
+  // C++ ROCKSDB_NAMESPACE::IndexSearchType enum
+  static jbyte toJavaIndexSearchType(
+      const ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType&
+          index_search_type) {
+    switch (index_search_type) {
+      case ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::kBinary:
+        return 0x0;
+      case ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+          kInterpolation:
+        return 0x1;
+      default:
+        return 0x7F;  // undefined
+    }
+  }
+
+  // Returns the equivalent C++ ROCKSDB_NAMESPACE::IndexSearchType enum for
+  // the provided Java org.rocksdb.IndexSearchType
+  static ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType
+  toCppIndexSearchType(jbyte jindex_search_type) {
+    switch (jindex_search_type) {
+      case 0x0:
+        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+            kBinary;
+      case 0x1:
+        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+            kInterpolation;
+      default:
+        // undefined/default
+        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+            kBinary;
+    }
+  }
+};
+
 // The portal class for org.rocksdb.ChecksumType
 class ChecksumTypeJni {
  public:

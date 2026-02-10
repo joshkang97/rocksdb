@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -153,98 +152,19 @@ struct DecodeEntryV4 {
   }
 };
 
-struct BinarySeek {
-  inline void operator()(int64_t left, int64_t right, int64_t* mid) const {
-    assert(left <= right);
-    assert(left >= -1);
-    // The `mid` is computed by rounding up so it lands in (`left`, `right`].
-    *mid = left + (right - left + 1) / 2;
+// Read first 8 bytes (starting at offset) as big-endian uint64_t, padding
+// with zeros on the right if the key is shorter. This preserves
+// lexicographic ordering.
+static uint64_t ReadBe64(const Slice& s, size_t offset = 0) {
+  uint64_t val = 0;
+  offset = std::min(offset, s.size());
+  size_t len = std::min(s.size() - offset, size_t{8});
+  for (size_t i = 0; i < len; i++) {
+    val = (val << 8) | static_cast<uint8_t>(s.data()[offset + i]);
   }
-};
-
-struct InterpolationSeek {
-  static constexpr int64_t kGuardLen = 8;
-
-  inline bool operator()(int64_t left, int64_t right, const Slice& left_key,
-                         const Slice& right_key, const Slice& target,
-                         size_t shared_prefix_len, int64_t* mid, bool* lte_left,
-                         bool* gt_right, const Comparator* comparator) const {
-    assert(left <= right);
-    assert(left >= 0);
-    if (right - left <= kGuardLen) {
-      // If the search window is small, fall back to binary search
-      return false;
-    }
-    assert(shared_prefix_len <= left_key.size() &&
-           shared_prefix_len <= right_key.size());
-    uint64_t left_val = ReadBe64(left_key, shared_prefix_len);
-    uint64_t right_val = ReadBe64(right_key, shared_prefix_len);
-    uint64_t target_val = ReadBe64(target, shared_prefix_len);
-
-    assert(left_val <= right_val);
-    if (target_val < left_val) {
-      assert(comparator->Compare(target, left_key) < 0);
-      *lte_left = true;
-      return true;
-    } else if (target_val == left_val) {
-      // target_val == left_val doesn't imply target == left_key
-      // because ReadBe64 only reads 8 bytes. We need to check actual key order.
-      if (comparator->Compare(target, left_key) <= 0) {
-        *lte_left = true;
-        return true;
-      } else {
-        // it is possible that target == left, so fallback to binary search
-        return false;
-      }
-    }
-    if (target_val > right_val) {
-      assert(comparator->Compare(target, right_key) > 0);
-      *gt_right = true;
-      return true;
-    }
-    if (right_val == left_val) {
-      return false;
-    }
-
-    // With uint128 support, we can avoid expensive floating point division and
-    // instead rely on integer division
-#ifdef HAVE_UINT128_EXTENSION
-    __uint128_t range = right - left;
-    __uint128_t target_delta = target_val - left_val;
-    uint64_t range_delta = right_val - left_val;
-    int64_t offset = static_cast<int64_t>(range * target_delta / range_delta);
-#else
-    double ratio = static_cast<double>(target_val - left_val) /
-                   static_cast<double>(right_val - left_val);
-    assert(0 <= ratio && ratio <= 1);
-    int64_t range = right - left;
-    int64_t offset = static_cast<int64_t>(range * ratio);
-#endif
-
-    *mid = left + offset;
-    assert(*mid <= right);
-    if (*mid == left) {
-      ++(*mid);
-    }
-
-    return true;
-  }
-
- private:
-  // Read first 8 bytes (starting at offset) as big-endian uint64_t, padding
-  // with zeros on the right if the key is shorter. This preserves
-  // lexicographic ordering.
-  static uint64_t ReadBe64(const Slice& s, size_t offset = 0) {
-    uint64_t val = 0;
-    offset = std::min(offset, s.size());
-    size_t len = std::min(s.size() - offset, size_t{8});
-    for (size_t i = 0; i < len; i++) {
-      val = (val << 8) | static_cast<uint8_t>(s.data()[offset + i]);
-    }
-    val <<= (8 - len) * 8;  // Pad zeros on the right
-    return val;
-  }
-};
+  val <<= (8 - len) * 8;  // Pad zeros on the right
+  return val;
+}
 
 void DataBlockIter::NextImpl() {
 #ifndef NDEBUG
@@ -401,8 +321,8 @@ void DataBlockIter::SeekImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = FindRestartPointIndex<DecodeKey, BinarySeek>(seek_key, &index,
-                                                         &skip_linear_scan);
+  bool ok = BinarySeekRestartPointIndex<DecodeKey>(seek_key, &index,
+                                                   &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -418,8 +338,8 @@ void MetaBlockIter::SeekImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = FindRestartPointIndex<DecodeKey, BinarySeek>(seek_key, &index,
-                                                         &skip_linear_scan);
+  bool ok = BinarySeekRestartPointIndex<DecodeKey>(seek_key, &index,
+                                                   &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -590,27 +510,13 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
     // restart interval must be one when hash search is enabled so the binary
     // search simply lands at the right place.
     skip_linear_scan = true;
-  } else if (value_delta_encoded_) {
-    if (index_search_type_ == BlockBasedTableOptions::kBinary ||
-        !raw_key_.IsUserKey()) {
-      ok = FindRestartPointIndex<DecodeKeyV4, BinarySeek>(seek_key, &index,
-                                                          &skip_linear_scan);
-    } else {
-      // Interpolation search implementation currently does not factor in
-      // sequence numbers in keys. Rare, but possible when a single user key
-      // spans multiple blocks. If this was the case, then there is also a good
-      // chance the data is not uniform either.
-      ok = FindRestartPointIndex<DecodeKeyV4, InterpolationSeek>(
-          seek_key, &index, &skip_linear_scan);
-    }
   } else {
-    if (index_search_type_ == BlockBasedTableOptions::kBinary ||
-        !raw_key_.IsUserKey()) {
-      ok = FindRestartPointIndex<DecodeKey, BinarySeek>(seek_key, &index,
-                                                        &skip_linear_scan);
+    if (value_delta_encoded_) {
+      ok = FindRestartPointForSeek<DecodeKeyV4>(seek_key, &index,
+                                                &skip_linear_scan);
     } else {
-      ok = FindRestartPointIndex<DecodeKey, InterpolationSeek>(
-          seek_key, &index, &skip_linear_scan);
+      ok = FindRestartPointForSeek<DecodeKey>(seek_key, &index,
+                                              &skip_linear_scan);
     }
   }
 
@@ -618,6 +524,23 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
     return;
   }
   FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+}
+
+template <typename DecodeKeyFunc>
+bool IndexBlockIter::FindRestartPointForSeek(const Slice& seek_key,
+                                             uint32_t* index,
+                                             bool* skip_linear_scan) {
+  // Interpolation search implementation currently does not factor in
+  // sequence numbers in keys. Rare, but possible when a single user key
+  // spans multiple blocks. If this was the case, then there is also a
+  // good chance the data is not uniform either.
+  if (index_search_type_ == BlockBasedTableOptions::kBinary ||
+      !raw_key_.IsUserKey()) {
+    return BinarySeekRestartPointIndex<DecodeKeyFunc>(seek_key, index,
+                                                      skip_linear_scan);
+  }
+  return InterpolationSeekRestartPointIndex<DecodeKeyFunc>(seek_key, index,
+                                                           skip_linear_scan);
 }
 
 void DataBlockIter::SeekForPrevImpl(const Slice& target) {
@@ -628,8 +551,8 @@ void DataBlockIter::SeekForPrevImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = FindRestartPointIndex<DecodeKey, BinarySeek>(seek_key, &index,
-                                                         &skip_linear_scan);
+  bool ok = BinarySeekRestartPointIndex<DecodeKey>(seek_key, &index,
+                                                   &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -655,8 +578,8 @@ void MetaBlockIter::SeekForPrevImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = FindRestartPointIndex<DecodeKey, BinarySeek>(seek_key, &index,
-                                                         &skip_linear_scan);
+  bool ok = BinarySeekRestartPointIndex<DecodeKey>(seek_key, &index,
+                                                   &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -948,15 +871,9 @@ bool BlockIter<TValue>::GetRestartKey(uint32_t index, Slice* key) {
   return true;
 }
 
-// Searches in restart array to find the starting restart point for the
-// linear scan, and stores it in `*index`. Assumes restart array does not
-// contain duplicate keys.
-//
-// SeekFunc is a functor used to reduce the search space of the restart array.
-// Given the left and right indices of the search space, it must return an index
-// "mid", such that left < mid <= right. `needs_keys` is
-// a static bool that can be set to mark if left and right keys are passed into
-// the functor.
+// Searches in restart array using binary search to find the starting restart
+// point for the linear scan, and stores it in `*index`. Assumes restart array
+// does not contain duplicate keys.
 //
 // It is guaranteed that the restart key at `*index + 1`
 // is strictly greater than `target` or does not exist (this can be used to
@@ -965,17 +882,16 @@ bool BlockIter<TValue>::GetRestartKey(uint32_t index, Slice* key) {
 // `*index`th restart key is the final result so that key does not need to be
 // compared again later.
 template <class TValue>
-template <typename DecodeKeyFunc, typename SeekFunc>
-bool BlockIter<TValue>::FindRestartPointIndex(const Slice& target,
-                                              uint32_t* index,
-                                              bool* skip_linear_scan) {
+template <typename DecodeKeyFunc>
+bool BlockIter<TValue>::BinarySeekRestartPointIndex(const Slice& target,
+                                                    uint32_t* index,
+                                                    bool* skip_linear_scan) {
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
-    // cause a problem for `BinarySeek()` as it'd try to access the first key
-    // which does not exist. We identify such blocks by the offset at which
-    // their restarts are stored, and return false to prevent any attempted
-    // key accesses.
+    // cause a problem as we'd try to access the first key which does not exist.
+    // We identify such blocks by the offset at which their restarts are stored,
+    // and return false to prevent any attempted key accesses.
     return false;
   }
 
@@ -987,77 +903,11 @@ bool BlockIter<TValue>::FindRestartPointIndex(const Slice& target,
   // - Any restart keys after index `right` are strictly greater than the target
   //   key.
   int64_t left = -1;
-
   int64_t right = num_restarts_ - 1;
-  int64_t shared_prefix_len = -1;
-  SeekFunc seek_func;
-  bool seek_failed = false;
+
   while (left != right) {
-    int64_t mid = 0;
-    if constexpr (std::is_same_v<SeekFunc, InterpolationSeek>) {
-      assert(ts_sz_ == 0);
-      assert(icmp_.user_comparator() == BytewiseComparator());
-      assert(raw_key_.IsUserKey());
-
-      if (!seek_failed) {
-        Slice left_key;
-        Slice right_key;
-
-        // Interpolation seek reads left and right bounaries anyways, so we can
-        // set left = 0. The invariant that left <= target is still held because
-        // we early exit if left > target for the first iteration.
-        left = std::max<int64_t>(left, 0);
-
-        if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(left),
-                                          &left_key)) {
-          return false;
-        }
-
-        if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(right),
-                                          &right_key)) {
-          return false;
-        }
-
-        if (shared_prefix_len < 0) {
-          // Compute the shared prefix length between smallest index key and
-          // largest index key this can be used to "normalize" the values
-          // calculated during interpolation search.
-          shared_prefix_len =
-              static_cast<int64_t>(left_key.difference_offset(right_key));
-        }
-
-        bool gt_right = false;
-        bool lte_left = false;
-        seek_failed = !seek_func(left, right, left_key, right_key, target,
-                                 static_cast<size_t>(shared_prefix_len), &mid,
-                                 &lte_left, &gt_right, icmp_.user_comparator());
-        // early exit if key is not within bounds
-        if (lte_left) {
-          assert(!seek_failed);
-          UpdateRawKeyAndMaybePadMinTimestamp(left_key);
-          assert(CompareCurrentKey(target) >= 0);
-          *skip_linear_scan = true;
-          *index = static_cast<uint32_t>(left);
-          return true;
-        }
-        if (gt_right) {
-          assert(!seek_failed);
-          UpdateRawKeyAndMaybePadMinTimestamp(right_key);
-          assert(CompareCurrentKey(target) < 0);
-          *index = static_cast<uint32_t>(right);
-          return true;
-        }
-        if (seek_failed) {
-          left--;  // need to re-extend search window to include left index
-        }
-      }
-      if (seek_failed) {
-        // Fallback to binary seek if failed
-        BinarySeek()(left, right, &mid);
-      }
-    } else {
-      seek_func(left, right, &mid);
-    }
+    // The `mid` is computed by rounding up so it lands in (`left`, `right`].
+    int64_t mid = left + (right - left + 1) / 2;
 
     assert(left < mid && mid <= right);
 
@@ -1081,6 +931,217 @@ bool BlockIter<TValue>::FindRestartPointIndex(const Slice& target,
       *skip_linear_scan = true;
       left = right = mid;
     }
+  }
+
+  if (left == -1) {
+    // All keys in the block were strictly greater than `target`. So the very
+    // first key in the block is the final seek result.
+    *skip_linear_scan = true;
+    *index = 0;
+  } else {
+    *index = static_cast<uint32_t>(left);
+  }
+  return true;
+}
+
+// Searches in restart array using interpolation search (with binary search
+// fallback) to find the starting restart point for the linear scan, and stores
+// it in `*index`. Assumes restart array does not contain duplicate keys.
+//
+// It is guaranteed that the restart key at `*index + 1`
+// is strictly greater than `target` or does not exist (this can be used to
+// elide a comparison when linear scan reaches all the way to the next restart
+// key). Furthermore, `*skip_linear_scan` is set to indicate whether the
+// `*index`th restart key is the final result so that key does not need to be
+// compared again later.
+template <class TValue>
+template <typename DecodeKeyFunc>
+bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
+    const Slice& target, uint32_t* index, bool* skip_linear_scan) {
+  static constexpr int64_t kGuardLen = 8;
+
+  if (restarts_ == 0) {
+    return false;
+  }
+
+  *skip_linear_scan = false;
+  assert(ts_sz_ == 0);
+  assert(icmp_.user_comparator() == BytewiseComparator());
+  assert(raw_key_.IsUserKey());
+
+  int64_t left = -1;
+  int64_t right = num_restarts_ - 1;
+  int64_t shared_prefix_len = -1;
+
+  Slice left_key;
+  Slice right_key;
+  bool seek_failed = false;
+
+#ifndef NDEBUG
+  // used to validate invariants
+  bool first_iter = true;
+#endif
+
+  // Loop invariants while not first iteration AND seek has not failed:
+  // - arr[usable_left] = left_key, arr[right] = right_key
+  // - left < mid <= right, and arr[left] < target < arr[right + 1]
+  //
+  // The first iteration is used as an early optimization to determine initial
+  // bounds, and whether target is within those bounds
+  while (left != right) {
+    int64_t mid = 0;
+
+    if (!seek_failed) {
+      // Interpolation seek reads left and right boundaries anyways, so we can
+      // set left = 0. The invariant that left <= target is still held because
+      // we early exit if left > target for the first iteration.
+      const auto usable_left = std::max<int64_t>(left, 0);
+
+      // First iteration: decode both boundary keys and compute shared prefix.
+      if (shared_prefix_len < 0) {
+        assert(first_iter);
+        if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(usable_left),
+                                          &left_key)) {
+          return false;
+        }
+
+        if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(right),
+                                          &right_key)) {
+          return false;
+        }
+
+        // Compute the shared prefix length between smallest index key and
+        // largest index key this can be used to "normalize" the values
+        // calculated during interpolation search.
+        shared_prefix_len =
+            static_cast<int64_t>(left_key.difference_offset(right_key));
+      }
+      assert(shared_prefix_len >= 0);
+
+      if (right - usable_left <= kGuardLen) {
+        // Search window is small, fall back to binary search.
+        seek_failed = true;
+      } else {
+        size_t spl = static_cast<size_t>(shared_prefix_len);
+        assert(spl <= left_key.size() && spl <= right_key.size());
+        uint64_t left_val = ReadBe64(left_key, spl);
+        uint64_t right_val = ReadBe64(right_key, spl);
+        uint64_t target_val = ReadBe64(target, spl);
+
+        if (left_val > right_val) {
+          CorruptionError("left key is greater than right key");
+          return false;
+        }
+
+        bool lte_left = false;
+        bool gt_right = false;
+
+        if (target_val < left_val) {
+          assert(first_iter);
+          assert(icmp_.user_comparator()->Compare(target, left_key) < 0);
+          lte_left = true;
+        } else if (target_val == left_val) {
+          // target_val == left_val doesn't imply target == left_key
+          // because ReadBe64 only reads 8 bytes. We need to check actual key
+          // order.
+          if (icmp_.user_comparator()->Compare(target, left_key) <= 0) {
+            assert(first_iter);
+            lte_left = true;
+          } else {
+            // target > left, which might not be distinguishable with
+            // interpolation search with 8 bytes of sensitivity, so fallback to
+            // binary search
+            seek_failed = true;
+          }
+        }
+
+        if (!lte_left && !seek_failed) {
+          if (target_val > right_val) {
+            // note that we only ever guarantee arr[target] < arr[right + 1], so
+            // it is possible to end up here even on non-first iteration
+            assert(icmp_.user_comparator()->Compare(target, right_key) > 0);
+            gt_right = true;
+          } else if (right_val == left_val) {
+            // cannot divide by 0
+            seek_failed = true;
+          }
+        }
+
+        // early exit if key is not within bounds
+        if (lte_left) {
+          assert(!seek_failed);
+          UpdateRawKeyAndMaybePadMinTimestamp(left_key);
+          assert(CompareCurrentKey(target) >= 0);
+          *skip_linear_scan = true;
+          *index = static_cast<uint32_t>(usable_left);
+          return true;
+        }
+        if (gt_right) {
+          assert(!seek_failed);
+          UpdateRawKeyAndMaybePadMinTimestamp(right_key);
+          assert(CompareCurrentKey(target) < 0);
+          *index = static_cast<uint32_t>(right);
+          return true;
+        }
+
+        if (!seek_failed) {
+#ifdef HAVE_UINT128_EXTENSION
+          __uint128_t range = right - usable_left;
+          __uint128_t target_delta = target_val - left_val;
+          uint64_t range_delta = right_val - left_val;
+          int64_t offset =
+              static_cast<int64_t>(range * target_delta / range_delta);
+#else
+          double ratio = static_cast<double>(target_val - left_val) /
+                         static_cast<double>(right_val - left_val);
+          assert(0 <= ratio && ratio <= 1);
+          int64_t range = right - usable_left;
+          int64_t offset = static_cast<int64_t>(range * ratio);
+#endif
+          mid = usable_left + offset;
+          assert(mid <= right);
+          if (mid == usable_left) {
+            // this is to guarantee progress and avoid infinite loop
+            ++mid;
+          }
+        }
+      }
+    }
+
+    if (seek_failed) {
+      // Fallback to binary seek
+      mid = left + (right - left + 1) / 2;
+    }
+
+    assert(left < mid && mid <= right);
+
+    Slice mid_key;
+    if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(mid), &mid_key)) {
+      return false;
+    }
+
+    UpdateRawKeyAndMaybePadMinTimestamp(mid_key);
+
+    int cmp = CompareCurrentKey(target);
+    if (cmp < 0) {
+      left = mid;
+      left_key = mid_key;
+    } else if (cmp > 0) {
+      right = mid - 1;
+      if (!seek_failed && left != right) {
+        if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(right),
+                                          &right_key)) {
+          return false;
+        }
+      }
+    } else {
+      *skip_linear_scan = true;
+      left = right = mid;
+    }
+
+#ifndef NDEBUG
+    first_iter = false;
+#endif
   }
 
   if (left == -1) {
