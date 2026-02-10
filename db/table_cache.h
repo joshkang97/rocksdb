@@ -99,7 +99,8 @@ class TableCache {
       const InternalKey* smallest_compaction_key,
       const InternalKey* largest_compaction_key, bool allow_unprepared_value,
       const SequenceNumber* range_del_read_seqno = nullptr,
-      std::unique_ptr<TruncatedRangeDelIterator>* range_del_iter = nullptr);
+      std::unique_ptr<TruncatedRangeDelIterator>* range_del_iter = nullptr,
+      bool maybe_pin_table_handle = false);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call get_context->SaveValue() repeatedly until
@@ -179,12 +180,13 @@ class TableCache {
                    const InternalKeyComparator& internal_comparator,
                    const FileMetaData& file_meta, TypedHandle**,
                    const MutableCFOptions& mutable_cf_options,
-                   const bool no_io = false,
+                   TableReader** table_reader, const bool no_io = false,
                    HistogramImpl* file_read_hist = nullptr,
                    bool skip_filters = false, int level = -1,
                    bool prefetch_index_and_filter_in_cache = true,
                    size_t max_file_size_for_l0_meta_pin = 0,
-                   Temperature file_temperature = Temperature::kUnknown);
+                   Temperature file_temperature = Temperature::kUnknown,
+                   bool pin_table_handle = false);
 
   // Get the table properties of a given table.
   // @no_io: indicates if we should load table to the cache if it is not present

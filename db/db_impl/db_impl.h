@@ -1720,6 +1720,13 @@ class DBImpl : public DB {
   // recovery.
   Status LogAndApplyForRecovery(const RecoveryContext& recovery_ctx);
 
+  // Schedule background work to open and validate SST files asynchronously.
+  // Called when open_files_async is enabled.
+  void ScheduleAsyncFileOpening();
+
+  // Background work function for async file opening.
+  static void BGWorkAsyncFileOpen(void* arg);
+
   void InvokeWalFilterIfNeededOnColumnFamilyToWalNumberMap();
 
   // Return true to proceed with current WAL record whose content is stored in
@@ -3061,6 +3068,9 @@ class DBImpl : public DB {
 
   // number of background obsolete file purge jobs, submitted to the HIGH pool
   int bg_purge_scheduled_ = 0;
+
+  // number of background async file opening jobs, submitted to the LOW pool
+  int bg_async_file_open_scheduled_ = 0;
 
   std::deque<ManualCompactionState*> manual_compaction_dequeue_;
 

@@ -11484,20 +11484,27 @@ TEST_F(DBCompactionTest, RecordNewestKeyTimeForTtlCompaction) {
   std::vector<FileMetaData*> file_metadatas = GetLevelFileMetadatas(0);
   ASSERT_EQ(file_metadatas.size(), 4);
   uint64_t first_newest_key_time =
-      file_metadatas[0]->fd.table_reader->GetTableProperties()->newest_key_time;
+      file_metadatas[0]
+          ->fd.table_reader.load(std::memory_order_acquire)
+          ->GetTableProperties()
+          ->newest_key_time;
   ASSERT_NE(first_newest_key_time, kUnknownNewestKeyTime);
   // Check that the newest_key_times are in expected ordering
   uint64_t prev_newest_key_time = first_newest_key_time;
   for (size_t idx = 1; idx < file_metadatas.size(); idx++) {
-    uint64_t newest_key_time = file_metadatas[idx]
-                                   ->fd.table_reader->GetTableProperties()
-                                   ->newest_key_time;
+    uint64_t newest_key_time =
+        file_metadatas[idx]
+            ->fd.table_reader.load(std::memory_order_acquire)
+            ->GetTableProperties()
+            ->newest_key_time;
 
     ASSERT_LT(newest_key_time, prev_newest_key_time);
     prev_newest_key_time = newest_key_time;
-    ASSERT_EQ(newest_key_time, file_metadatas[idx]
-                                   ->fd.table_reader->GetTableProperties()
-                                   ->creation_time);
+    ASSERT_EQ(newest_key_time,
+              file_metadatas[idx]
+                  ->fd.table_reader.load(std::memory_order_acquire)
+                  ->GetTableProperties()
+                  ->creation_time);
   }
   // The delta between the first and last newest_key_times is 15s
   uint64_t last_newest_key_time = prev_newest_key_time;
@@ -11511,14 +11518,18 @@ TEST_F(DBCompactionTest, RecordNewestKeyTimeForTtlCompaction) {
   ASSERT_EQ(NumTableFilesAtLevel(0), 1);
   file_metadatas = GetLevelFileMetadatas(0);
   ASSERT_EQ(file_metadatas.size(), 1);
-  ASSERT_EQ(
-      file_metadatas[0]->fd.table_reader->GetTableProperties()->newest_key_time,
-      first_newest_key_time);
+  ASSERT_EQ(file_metadatas[0]
+                ->fd.table_reader.load(std::memory_order_acquire)
+                ->GetTableProperties()
+                ->newest_key_time,
+            first_newest_key_time);
   // Contrast newest_key_time with creation_time, which records the oldest
   // ancestor time (15s older than newest_key_time)
-  ASSERT_EQ(
-      file_metadatas[0]->fd.table_reader->GetTableProperties()->creation_time,
-      last_newest_key_time);
+  ASSERT_EQ(file_metadatas[0]
+                ->fd.table_reader.load(std::memory_order_acquire)
+                ->GetTableProperties()
+                ->creation_time,
+            last_newest_key_time);
   ASSERT_EQ(file_metadatas[0]->oldest_ancester_time, last_newest_key_time);
 
   // Make sure TTL of 5s causes compaction

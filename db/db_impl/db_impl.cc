@@ -545,7 +545,7 @@ Status DBImpl::CloseHelper() {
   // Wait for background work to finish
   while (bg_bottom_compaction_scheduled_ || bg_compaction_scheduled_ ||
          bg_flush_scheduled_ || bg_purge_scheduled_ ||
-         pending_purge_obsolete_files_ ||
+         bg_async_file_open_scheduled_ || pending_purge_obsolete_files_ ||
          error_handler_.IsRecoveryInProgress()) {
     TEST_SYNC_POINT("DBImpl::~DBImpl:WaitJob");
     bg_cv_.Wait();

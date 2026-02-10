@@ -4387,6 +4387,7 @@ void InitializeOptionsFromFlags(
     }
   }
   options.max_open_files = FLAGS_open_files;
+  options.open_files_async = FLAGS_open_files_async;
   if (FLAGS_statistics) {
     options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
   }

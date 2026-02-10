@@ -12,6 +12,7 @@
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "db/periodic_task_scheduler.h"
+#include "db/version_util.h"
 #include "env/composite_env_wrapper.h"
 #include "file/filename.h"
 #include "file/read_write_util.h"
@@ -294,6 +295,12 @@ Status DBImpl::ValidateOptions(const DBOptions& db_options) {
     return Status::InvalidArgument(
         "write_dbid_to_manifest and write_identity_file cannot both be false");
   }
+
+  if (db_options.open_files_async && db_options.max_open_files != -1) {
+    return Status::InvalidArgument(
+        "open_files_async is not useful except when max_open_files = -1.");
+  }
+
   return Status::OK();
 }
 
@@ -2657,6 +2664,10 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     impl->DeleteObsoleteFiles();
     TEST_SYNC_POINT("DBImpl::Open:AfterDeleteFiles");
     impl->MaybeScheduleFlushOrCompaction();
+
+    if (impl->immutable_db_options_.open_files_async) {
+      impl->ScheduleAsyncFileOpening();
+    }
     impl->mutex_.Unlock();
   }
 
@@ -2705,4 +2716,99 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   }
   return s;
 }
+
+// Context for async file opening background work
+struct AsyncFileOpenContext {
+  DBImpl* db;
+  FileOptions file_options;
+  std::vector<Version*> versions;
+
+  ~AsyncFileOpenContext() {
+    for (auto* v : versions) {
+      v->Unref();
+    }
+  }
+};
+
+void DBImpl::ScheduleAsyncFileOpening() {
+  mutex_.AssertHeld();
+
+  auto* ctx = new AsyncFileOpenContext();
+  ctx->db = this;
+  ctx->file_options = versions_->file_options();
+
+  for (auto cfd : *versions_->GetColumnFamilySet()) {
+    assert(!cfd->IsDropped());
+    Version* current = cfd->current();
+    VersionStorageInfo* vstorage = current->storage_info();
+    bool has_files = false;
+    for (int level = 0; level < vstorage->num_levels() && !has_files; level++) {
+      has_files = !vstorage->LevelFiles(level).empty();
+    }
+    if (has_files) {
+      current->Ref();
+      ctx->versions.push_back(current);
+    }
+  }
+
+  bg_async_file_open_scheduled_++;
+
+  // since this is a one time job, best to schedule it with high priority
+  env_->Schedule(&DBImpl::BGWorkAsyncFileOpen, ctx, Env::Priority::HIGH,
+                 nullptr);
+}
+
+void DBImpl::BGWorkAsyncFileOpen(void* arg) {
+  TEST_SYNC_POINT("DBImpl::BGWorkAsyncFileOpen::Start");
+
+  AsyncFileOpenContext* raw_ctx = reinterpret_cast<AsyncFileOpenContext*>(arg);
+  DBImpl* db = raw_ctx->db;
+
+  auto deleter = [db](AsyncFileOpenContext* p) {
+    InstrumentedMutexLock l(&db->mutex_);
+    delete p;
+    db->bg_async_file_open_scheduled_--;
+    db->bg_cv_.SignalAll();
+  };
+  std::unique_ptr<AsyncFileOpenContext, decltype(deleter)> ctx(raw_ctx,
+                                                               deleter);
+
+  if (ctx->versions.empty()) {
+    return;
+  }
+  ReadOptions ro;
+
+  for (auto* version : ctx->versions) {
+    ColumnFamilyData* cfd = version->cfd();
+    VersionStorageInfo* vstorage = version->storage_info();
+
+    const MutableCFOptions& mutable_cf_options =
+        cfd->GetLatestMutableCFOptions();
+    size_t max_file_size_for_l0_meta_pin =
+        MaxFileSizeForL0MetaPin(mutable_cf_options);
+
+    std::vector<std::pair<FileMetaData*, int>> files_meta;
+    for (int level = 0; level < vstorage->num_levels(); level++) {
+      for (FileMetaData* file_meta : vstorage->LevelFiles(level)) {
+        files_meta.emplace_back(file_meta, level);
+      }
+    }
+
+    Status s = LoadTableHandlersHelper(
+        files_meta, cfd->table_cache(), ctx->file_options,
+        *vstorage->InternalComparator(), cfd->internal_stats(),
+        db->immutable_db_options_.max_file_opening_threads,
+        false /* prefetch_index_and_filter_in_cache */, mutable_cf_options,
+        max_file_size_for_l0_meta_pin, ro, &db->shutting_down_);
+    if (!s.ok()) {
+      ROCKS_LOG_ERROR(
+          db->immutable_db_options_.info_log,
+          "BGWorkAsyncFileOpen: LoadTableHandlers failed for CF %s: "
+          "%s",
+          cfd->GetName().c_str(), s.ToString().c_str());
+    }
+  }
+  TEST_SYNC_POINT("DBImpl::BGWorkAsyncFileOpen:Done");
+}
+
 }  // namespace ROCKSDB_NAMESPACE

@@ -78,10 +78,10 @@ Compaction* FIFOCompactionPicker::PickTTLCompaction(
     for (auto ritr = level_files.rbegin(); ritr != level_files.rend(); ++ritr) {
       FileMetaData* f = *ritr;
       assert(f);
-      if (f->fd.table_reader && f->fd.table_reader->GetTableProperties()) {
+      TableReader* t = f->fd.table_reader.load(std::memory_order_acquire);
+      if (t && t->GetTableProperties()) {
         uint64_t newest_key_time = f->TryGetNewestKeyTime();
-        uint64_t creation_time =
-            f->fd.table_reader->GetTableProperties()->creation_time;
+        uint64_t creation_time = t->GetTableProperties()->creation_time;
         uint64_t est_newest_key_time = newest_key_time == kUnknownNewestKeyTime
                                            ? creation_time
                                            : newest_key_time;
@@ -109,8 +109,9 @@ Compaction* FIFOCompactionPicker::PickTTLCompaction(
     assert(f);
     uint64_t newest_key_time = f->TryGetNewestKeyTime();
     uint64_t creation_time = 0;
-    if (f->fd.table_reader && f->fd.table_reader->GetTableProperties()) {
-      creation_time = f->fd.table_reader->GetTableProperties()->creation_time;
+    TableReader* t = f->fd.table_reader.load(std::memory_order_acquire);
+    if (t && t->GetTableProperties()) {
+      creation_time = t->GetTableProperties()->creation_time;
     }
     uint64_t est_newest_key_time = newest_key_time == kUnknownNewestKeyTime
                                        ? creation_time

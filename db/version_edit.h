@@ -140,7 +140,7 @@ uint64_t PackFileNumberAndPathId(uint64_t number, uint64_t path_id);
 // file is not in any live version any more.
 struct FileDescriptor {
   // Table reader in table_reader_handle
-  TableReader* table_reader;
+  mutable std::atomic<TableReader*> table_reader;
   uint64_t packed_number_and_path_id;
   uint64_t file_size;             // File size in bytes
   SequenceNumber smallest_seqno;  // The smallest seqno in this file
@@ -162,7 +162,8 @@ struct FileDescriptor {
   FileDescriptor(const FileDescriptor& fd) { *this = fd; }
 
   FileDescriptor& operator=(const FileDescriptor& fd) {
-    table_reader = fd.table_reader;
+    table_reader.store(fd.table_reader.load(std::memory_order_acquire),
+                       std::memory_order_release);
     packed_number_and_path_id = fd.packed_number_and_path_id;
     file_size = fd.file_size;
     smallest_seqno = fd.smallest_seqno;
@@ -197,8 +198,9 @@ struct FileMetaData {
   InternalKey smallest;  // Smallest internal key served by table
   InternalKey largest;   // Largest internal key served by table
 
-  // Needs to be disposed when refs becomes 0.
-  Cache::Handle* table_reader_handle = nullptr;
+  // Needs to be disposed when refs becomes 0. NOTE: it is only safe to read the
+  // table_reader_handle AFTER performaing an acquire load on fd.table_reader.
+  mutable Cache::Handle* table_reader_handle = nullptr;
 
   FileSampledStats stats;
 
@@ -346,9 +348,10 @@ struct FileMetaData {
   uint64_t TryGetOldestAncesterTime() {
     if (oldest_ancester_time != kUnknownOldestAncesterTime) {
       return oldest_ancester_time;
-    } else if (fd.table_reader != nullptr &&
-               fd.table_reader->GetTableProperties() != nullptr) {
-      return fd.table_reader->GetTableProperties()->creation_time;
+    }
+    TableReader* reader = fd.table_reader.load(std::memory_order_acquire);
+    if (reader != nullptr && reader->GetTableProperties() != nullptr) {
+      return reader->GetTableProperties()->creation_time;
     }
     return kUnknownOldestAncesterTime;
   }
@@ -356,9 +359,10 @@ struct FileMetaData {
   uint64_t TryGetFileCreationTime() {
     if (file_creation_time != kUnknownFileCreationTime) {
       return file_creation_time;
-    } else if (fd.table_reader != nullptr &&
-               fd.table_reader->GetTableProperties() != nullptr) {
-      return fd.table_reader->GetTableProperties()->file_creation_time;
+    }
+    TableReader* reader = fd.table_reader.load(std::memory_order_acquire);
+    if (reader != nullptr && reader->GetTableProperties() != nullptr) {
+      return reader->GetTableProperties()->file_creation_time;
     }
     return kUnknownFileCreationTime;
   }
@@ -366,10 +370,9 @@ struct FileMetaData {
   // Tries to get the newest key time from the current file
   // Falls back on oldest ancestor time of previous (newer) file
   uint64_t TryGetNewestKeyTime(FileMetaData* prev_file = nullptr) {
-    if (fd.table_reader != nullptr &&
-        fd.table_reader->GetTableProperties() != nullptr) {
-      uint64_t newest_key_time =
-          fd.table_reader->GetTableProperties()->newest_key_time;
+    TableReader* reader = fd.table_reader.load(std::memory_order_acquire);
+    if (reader != nullptr && reader->GetTableProperties() != nullptr) {
+      uint64_t newest_key_time = reader->GetTableProperties()->newest_key_time;
       if (newest_key_time != kUnknownNewestKeyTime) {
         return newest_key_time;
       }

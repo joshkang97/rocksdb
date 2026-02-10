@@ -630,6 +630,18 @@ struct DBOptions {
   // Default: true
   bool paranoid_checks = true;
 
+  // If true, SST files are opened and validated asynchronously in the
+  // background after DB::Open returns. This reduces DB open time for
+  // databases with many SST files. This means if max_open_files=-1 and
+  // open_files_async=true, a corrupted SST will not show up in DBOpen, but
+  // instead will show up in any read requests that read from that file.
+  //
+  // When false (default), max_open_files SST files are opened and validated
+  // during DB::Open.
+  //
+  // Default: false
+  bool open_files_async = false;
+
   // DEPRECATED: This option might be removed in a future release.
   //
   // If true, during memtable flush, RocksDB will validate total entries

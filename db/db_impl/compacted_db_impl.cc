@@ -91,8 +91,8 @@ Status CompactedDBImpl::Get(const ReadOptions& _read_options,
           /*b_has_ts=*/false) < 0) {
     return Status::NotFound();
   }
-  Status s = f.fd.table_reader->Get(read_options, lkey.internal_key(),
-                                    &get_context, nullptr);
+  TableReader* t = f.fd.table_reader.load(std::memory_order_acquire);
+  Status s = t->Get(read_options, lkey.internal_key(), &get_context, nullptr);
   if (!s.ok() && !s.IsNotFound()) {
     return s;
   }
@@ -164,8 +164,9 @@ void CompactedDBImpl::MultiGet(const ReadOptions& _read_options,
             /*b_has_ts=*/false) < 0) {
       reader_list.push_back(nullptr);
     } else {
-      f.fd.table_reader->Prepare(lkey.internal_key());
-      reader_list.push_back(f.fd.table_reader);
+      TableReader* t = f.fd.table_reader.load(std::memory_order_acquire);
+      t->Prepare(lkey.internal_key());
+      reader_list.push_back(t);
     }
   }
   for (size_t i = 0; i < num_keys; ++i) {
