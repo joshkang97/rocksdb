@@ -2679,14 +2679,15 @@ void TableTest::IndexTest(BlockBasedTableOptions table_options) {
 TEST_P(BlockBasedTableTest, BinaryIndexTestBinarySearch) {
   BlockBasedTableOptions table_options = GetBlockBasedTableOptions();
   table_options.index_type = BlockBasedTableOptions::kBinarySearch;
-  table_options.index_search_type = BlockBasedTableOptions::kBinary;
+  table_options.index_block_search_type = BlockBasedTableOptions::kBinary;
   IndexTest(table_options);
 }
 
 TEST_P(BlockBasedTableTest, BinaryIndexTestInterpolationSearch) {
   BlockBasedTableOptions table_options = GetBlockBasedTableOptions();
   table_options.index_type = BlockBasedTableOptions::kBinarySearch;
-  table_options.index_search_type = BlockBasedTableOptions::kInterpolation;
+  table_options.index_block_search_type =
+      BlockBasedTableOptions::kInterpolation;
   IndexTest(table_options);
 }
 

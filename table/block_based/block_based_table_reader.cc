@@ -1707,7 +1707,7 @@ IndexBlockIter* BlockBasedTable::InitBlockIterator<IndexBlockIter>(
       /* total_order_seek */ true, rep->index_has_first_key,
       rep->index_key_includes_seq, rep->index_value_is_full,
       block_contents_pinned, rep->user_defined_timestamps_persisted,
-      nullptr /* prefix_index */, rep->table_options.index_search_type);
+      nullptr /* prefix_index */, rep->table_options.index_block_search_type);
 }
 
 // Right now only called for Data blocks.

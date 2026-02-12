@@ -154,8 +154,9 @@ struct DecodeEntryV4 {
 
 // Read first 8 bytes (starting at offset) as big-endian uint64_t, padding
 // with zeros on the right if the key is shorter. This preserves
-// lexicographic ordering.
-static uint64_t ReadBe64(Slice s, bool is_user_key, size_t offset) {
+// lexicographic ordering. Non-user keys will also have end internal bytes
+// stripped and not counted for in the value.
+static uint64_t ReadBe64FromKey(Slice s, bool is_user_key, size_t offset) {
   if (!is_user_key) {
     assert(s.size() >= kNumInternalBytes);
     s = Slice(s.data(), s.size() - kNumInternalBytes);
@@ -1029,9 +1030,10 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
       size_t spl = static_cast<size_t>(shared_prefix_len);
       assert(spl <= left_key.size() && spl <= right_key.size());
-      uint64_t left_val = ReadBe64(left_key, raw_key_.IsUserKey(), spl);
-      uint64_t right_val = ReadBe64(right_key, raw_key_.IsUserKey(), spl);
-      uint64_t target_val = ReadBe64(target, raw_key_.IsUserKey(), spl);
+      uint64_t left_val = ReadBe64FromKey(left_key, raw_key_.IsUserKey(), spl);
+      uint64_t right_val =
+          ReadBe64FromKey(right_key, raw_key_.IsUserKey(), spl);
+      uint64_t target_val = ReadBe64FromKey(target, raw_key_.IsUserKey(), spl);
 
       if (left_val > right_val) {
         CorruptionError("left key is greater than right key");
@@ -1047,8 +1049,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         lte_left = true;
       } else if (target_val == left_val) {
         // target_val == left_val doesn't imply target == left_key
-        // because ReadBe64 only reads 8 bytes and skips sequence numbers. We
-        // need to check actual key order.
+        // because ReadBe64FromKey only reads 8 bytes and skips sequence
+        // numbers. We need to check actual key order.
         if (CompareKey(target, left_key) <= 0) {
           assert(first_iter);
           lte_left = true;
@@ -1569,7 +1571,7 @@ IndexBlockIter* Block::NewIndexIterator(
     bool have_first_key, bool key_includes_seq, bool value_is_full,
     bool block_contents_pinned, bool user_defined_timestamps_persisted,
     BlockPrefixIndex* prefix_index,
-    BlockBasedTableOptions::IndexSearchType index_search_type) {
+    BlockBasedTableOptions::BlockSearchType index_block_search_type) {
   IndexBlockIter* ret_iter;
   if (iter != nullptr) {
     ret_iter = iter;
@@ -1592,7 +1594,7 @@ IndexBlockIter* Block::NewIndexIterator(
                          key_includes_seq, value_is_full, block_contents_pinned,
                          user_defined_timestamps_persisted,
                          protection_bytes_per_key_, kv_checksum_,
-                         block_restart_interval_, index_search_type);
+                         block_restart_interval_, index_block_search_type);
   }
 
   return ret_iter;

@@ -115,7 +115,7 @@ public class BlockBasedTableConfigTest {
       assertThat(opts).contains("index_type=kBinarySearch");
       assertThat(opts).contains("data_block_index_type=kDataBlockBinarySearch");
       assertThat(opts).contains("checksum=kNoChecksum");
-      assertThat(opts).contains("index_search_type=kBinary");
+      assertThat(opts).contains("index_block_search_type=kBinary");
     }
 
     tableConfig.setIndexType(IndexType.kHashSearch);

@@ -7,7 +7,7 @@
 package org.rocksdb;
 
 /**
- * IndexSearchType used in conjunction with BlockBasedTable.
+ * BlockSearchType used in conjunction with BlockBasedTable.
  */
 public enum IndexSearchType {
   /**

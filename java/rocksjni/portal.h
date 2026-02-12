@@ -7020,14 +7020,14 @@ class DataBlockIndexTypeJni {
 class IndexSearchTypeJni {
  public:
   // Returns the equivalent org.rocksdb.IndexSearchType for the provided
-  // C++ ROCKSDB_NAMESPACE::IndexSearchType enum
+  // C++ ROCKSDB_NAMESPACE::BlockSearchType enum
   static jbyte toJavaIndexSearchType(
-      const ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType&
-          index_search_type) {
-    switch (index_search_type) {
-      case ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::kBinary:
+      const ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType&
+          index_block_search_type) {
+    switch (index_block_search_type) {
+      case ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType::kBinary:
         return 0x0;
-      case ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+      case ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType::
           kInterpolation:
         return 0x1;
       default:
@@ -7035,20 +7035,20 @@ class IndexSearchTypeJni {
     }
   }
 
-  // Returns the equivalent C++ ROCKSDB_NAMESPACE::IndexSearchType enum for
+  // Returns the equivalent C++ ROCKSDB_NAMESPACE::BlockSearchType enum for
   // the provided Java org.rocksdb.IndexSearchType
-  static ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType
+  static ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType
   toCppIndexSearchType(jbyte jindex_search_type) {
     switch (jindex_search_type) {
       case 0x0:
-        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType::
             kBinary;
       case 0x1:
-        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType::
             kInterpolation;
       default:
         // undefined/default
-        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::IndexSearchType::
+        return ROCKSDB_NAMESPACE::BlockBasedTableOptions::BlockSearchType::
             kBinary;
     }
   }
@@ -9289,7 +9289,7 @@ class BlockBasedTableOptionsJni
         IndexShorteningModeJni::toJavaIndexShorteningMode(
             table_factory_options->index_shortening),
         IndexSearchTypeJni::toJavaIndexSearchType(
-            table_factory_options->index_search_type),
+            table_factory_options->index_block_search_type),
         FilterPolicyJni::toJavaIndexType(filter_policy_type),
         filter_policy_handle, filter_policy_config_value);
     if (env->ExceptionCheck()) {

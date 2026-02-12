@@ -582,7 +582,7 @@ class IndexBlockTest
     : public testing::Test,
       public testing::WithParamInterface<
           std::tuple<bool, bool, bool, test::UserDefinedTimestampTestMode,
-                     BlockBasedTableOptions::IndexSearchType, int, int, int,
+                     BlockBasedTableOptions::BlockSearchType, int, int, int,
                      int, KeyDistribution>> {
  public:
   IndexBlockTest() = default;
@@ -596,7 +596,7 @@ class IndexBlockTest
   bool shouldPersistUDT() const {
     return test::ShouldPersistUDT(std::get<3>(GetParam()));
   }
-  BlockBasedTableOptions::IndexSearchType indexSearchType() const {
+  BlockBasedTableOptions::BlockSearchType indexSearchType() const {
     return isUDTEnabled() ? BlockBasedTableOptions::kBinary
                           : std::get<4>(GetParam());
   }
@@ -797,8 +797,8 @@ INSTANTIATE_TEST_CASE_P(
         ::testing::Bool(), ::testing::Bool(), ::testing::Bool(),
         ::testing::ValuesIn(test::GetUDTTestModes()),
         ::testing::Values(
-            BlockBasedTableOptions::IndexSearchType::kBinary,
-            BlockBasedTableOptions::IndexSearchType::kInterpolation),
+            BlockBasedTableOptions::BlockSearchType::kBinary,
+            BlockBasedTableOptions::BlockSearchType::kInterpolation),
         ::testing::Values(1, 100),    // num_records
         ::testing::Values(1, 16),     // index_block_restart_interval
         ::testing::Values(1, 8, 12),  // key_length

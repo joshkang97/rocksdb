@@ -145,7 +145,7 @@ jlong Java_org_rocksdb_BlockBasedTableConfig_newTableFactoryHandle(
   options.index_shortening =
       ROCKSDB_NAMESPACE::IndexShorteningModeJni::toCppIndexShorteningMode(
           jindex_shortening);
-  options.index_search_type =
+  options.index_block_search_type =
       ROCKSDB_NAMESPACE::IndexSearchTypeJni::toCppIndexSearchType(
           jindex_search_type);
 

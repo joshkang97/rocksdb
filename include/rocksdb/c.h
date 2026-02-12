@@ -1210,11 +1210,11 @@ extern ROCKSDB_LIBRARY_API void
 rocksdb_block_based_options_set_data_block_index_type(
     rocksdb_block_based_table_options_t*, int);  // uses one of the above enums
 enum {
-  rocksdb_block_based_table_index_search_type_binary = 0,
-  rocksdb_block_based_table_index_search_type_interpolation = 1,
+  rocksdb_block_based_table_index_block_search_type_binary = 0,
+  rocksdb_block_based_table_index_block_search_type_interpolation = 1,
 };
 extern ROCKSDB_LIBRARY_API void
-rocksdb_block_based_options_set_index_search_type(
+rocksdb_block_based_options_set_index_block_search_type(
     rocksdb_block_based_table_options_t*, int);  // uses one of the above enums
 extern ROCKSDB_LIBRARY_API void
 rocksdb_block_based_options_set_data_block_hash_ratio(

@@ -3757,10 +3757,10 @@ void rocksdb_block_based_options_set_data_block_index_type(
       static_cast<BlockBasedTableOptions::DataBlockIndexType>(v);
 }
 
-void rocksdb_block_based_options_set_index_search_type(
+void rocksdb_block_based_options_set_index_block_search_type(
     rocksdb_block_based_table_options_t* options, int v) {
-  options->rep.index_search_type =
-      static_cast<BlockBasedTableOptions::IndexSearchType>(v);
+  options->rep.index_block_search_type =
+      static_cast<BlockBasedTableOptions::BlockSearchType>(v);
 }
 
 void rocksdb_block_based_options_set_data_block_hash_ratio(

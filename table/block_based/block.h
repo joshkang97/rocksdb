@@ -233,8 +233,8 @@ class Block {
   // It is determined by IndexType property of the table.
   // `user_defined_timestamps_persisted` controls whether a min timestamp is
   // padded while key is being parsed from the block.
-  // `index_search_type` controls which search algorithm to use when reading
-  // the index block. kBinary uses binary search, while
+  // `index_block_search_type` controls which search algorithm to use when
+  // reading the index block. kBinary uses binary search, while
   // kInterpolation uses interpolation search which can be faster
   // for uniformly distributed keys.
   IndexBlockIter* NewIndexIterator(
@@ -244,7 +244,7 @@ class Block {
       bool block_contents_pinned = false,
       bool user_defined_timestamps_persisted = true,
       BlockPrefixIndex* prefix_index = nullptr,
-      BlockBasedTableOptions::IndexSearchType index_search_type =
+      BlockBasedTableOptions::BlockSearchType index_block_search_type =
           BlockBasedTableOptions::kBinary);
 
   // Report an approximation of how much memory has been used.
@@ -850,15 +850,14 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
   // format.
   // value_is_full, default true, means that no delta encoding is
   // applied to values.
-  void Initialize(const Comparator* raw_ucmp, const char* data,
-                  uint32_t restarts, uint32_t num_restarts,
-                  SequenceNumber global_seqno, BlockPrefixIndex* prefix_index,
-                  bool have_first_key, bool key_includes_seq,
-                  bool value_is_full, bool block_contents_pinned,
-                  bool user_defined_timestamps_persisted,
-                  uint8_t protection_bytes_per_key, const char* kv_checksum,
-                  uint32_t block_restart_interval,
-                  BlockBasedTableOptions::IndexSearchType index_search_type) {
+  void Initialize(
+      const Comparator* raw_ucmp, const char* data, uint32_t restarts,
+      uint32_t num_restarts, SequenceNumber global_seqno,
+      BlockPrefixIndex* prefix_index, bool have_first_key,
+      bool key_includes_seq, bool value_is_full, bool block_contents_pinned,
+      bool user_defined_timestamps_persisted, uint8_t protection_bytes_per_key,
+      const char* kv_checksum, uint32_t block_restart_interval,
+      BlockBasedTableOptions::BlockSearchType index_block_search_type) {
     InitializeBase(raw_ucmp, data, restarts, num_restarts,
                    kDisableGlobalSequenceNumber, block_contents_pinned,
                    user_defined_timestamps_persisted, protection_bytes_per_key,
@@ -867,7 +866,7 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
     prefix_index_ = prefix_index;
     value_delta_encoded_ = !value_is_full;
     have_first_key_ = have_first_key;
-    index_search_type_ = index_search_type;
+    index_search_type_ = index_block_search_type;
     if (have_first_key_ && global_seqno != kDisableGlobalSequenceNumber) {
       global_seqno_state_.reset(new GlobalSeqnoState(global_seqno));
     } else {
@@ -963,7 +962,7 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
   std::string first_internal_key_with_ts_;
 
   // The search algorithm to use when reading the index block.
-  BlockBasedTableOptions::IndexSearchType index_search_type_ =
+  BlockBasedTableOptions::BlockSearchType index_search_type_ =
       BlockBasedTableOptions::kBinary;
 
   // Set *prefix_may_exist to false if no key possibly share the same prefix
