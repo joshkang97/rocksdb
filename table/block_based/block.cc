@@ -1045,13 +1045,13 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
       if (target_val < left_val) {
         assert(first_iter);
-        assert(CompareKey(target, left_key) < 0);
+        assert(CompareKey(left_key, target) > 0);
         lte_left = true;
       } else if (target_val == left_val) {
         // target_val == left_val doesn't imply target == left_key
         // because ReadBe64FromKey only reads 8 bytes and skips sequence
         // numbers. We need to check actual key order.
-        if (CompareKey(target, left_key) <= 0) {
+        if (CompareKey(left_key, target) >= 0) {
           assert(first_iter);
           lte_left = true;
         }
@@ -1061,7 +1061,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         if (target_val > right_val) {
           // note that we only ever guarantee arr[target] < arr[right + 1], so
           // it is possible to end up here even on non-first iteration
-          assert(CompareKey(target, right_key) > 0);
+          assert(CompareKey(right_key, target) < 0);
           gt_right = true;
         } else if (right_val == left_val) {
           // cannot divide by 0
