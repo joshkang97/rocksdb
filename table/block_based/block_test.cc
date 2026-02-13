@@ -788,9 +788,10 @@ TEST_P(IndexBlockTest, IndexValueEncodingTest) {
 // Param 3: user-defined timestamp test mode
 // Param 4: index search type (binary search or interpolation search)
 // Param 5: number of records
-// Param 6: key length
-// Param 7: prefix length
-// Param 8: key distribution (uniform or non-uniform)
+// Param 6: index block restart interval
+// Param 7: key length
+// Param 8: prefix length
+// Param 9: key distribution (uniform or non-uniform)
 INSTANTIATE_TEST_CASE_P(
     P, IndexBlockTest,
     ::testing::Combine(
