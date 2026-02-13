@@ -1178,9 +1178,6 @@ def finalize_and_sanitize(src_params):
         if dest_params.get("block_align") == 1:
             dest_params["compression_type"] = "none"
             dest_params["bottommost_compression_type"] = "none"
-    if dest_params.get("separate_key_value_in_data_block") == 1:
-        if dest_params.get("format_version", 0) < 2:
-            dest_params["format_version"] = 2
     # If periodic_compaction_seconds is not set, daily_offpeak_time_utc doesn't do anything
     if dest_params.get("periodic_compaction_seconds") == 0:
         dest_params["daily_offpeak_time_utc"] = ""

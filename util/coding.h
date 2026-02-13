@@ -39,7 +39,9 @@ const uint32_t kMaxVarint64Length = 10;
 void PutFixed16(std::string* dst, uint16_t value);
 void PutFixed32(std::string* dst, uint32_t value);
 void PutFixed64(std::string* dst, uint64_t value);
-// PutVarint32 is a variadic template defined below
+
+template <typename... Args>
+void PutVarint32(std::string* dst, Args... args);
 void PutVarint64(std::string* dst, uint64_t value);
 void PutVarint64Varint64(std::string* dst, uint64_t value1, uint64_t value2);
 void PutVarint32Varint64(std::string* dst, uint32_t value1, uint64_t value2);
