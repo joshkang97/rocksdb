@@ -586,9 +586,6 @@ struct BlockBasedTableOptions {
   // using a non-built-in CompatibilityName(). See `compression_manager` in
   // ColumnFamilyOptions. Also changes the format of TableProperties field
   // `compression_name`. Can be read by RocksDB versions >= 10.4.0.
-  // 8 -- Support for separation of keys and values in data blocks, for
-  // potential read performance and compression improvements. See
-  // `separate_key_value_in_data_block` in BlockBasedTableOptions.
   //
   // Using the default setting of format_version is strongly recommended, so
   // that available enhancements are adopted eventually and automatically. The
@@ -596,14 +593,13 @@ struct BlockBasedTableOptions {
   // validation and sufficient time and number of releases have elapsed
   // (6 months recommended) to ensure a clean downgrade/revert path for users
   // who might only upgrade a few times per year.
-  uint32_t format_version = 8;
+  uint32_t format_version = 7;
 
   // When true, data blocks store keys and values separately. Keys are stored
   // at the beginning of the block, followed by values at the end. This can
   // improve read performance at a cost of a varint per restart interval (~1 bit
-  // per key by default). It has also been shown to improve compression. Small
-  // values or low block_restart_interval may prefer to set this as false.
-  // Requires format_version >= 8.
+  // per key by default), in addition to improving compression. Small values or
+  // low block_restart_interval may prefer to set this as false.
   //
   // Default: false
   bool separate_key_value_in_data_block = false;

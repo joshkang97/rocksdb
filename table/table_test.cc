@@ -1154,9 +1154,8 @@ class BlockBasedTableTest : public BlockBasedTableTestBase,
     auto param = GetParam();
     options.super_block_alignment_size = std::get<1>(param);
     options.super_block_alignment_space_overhead_ratio = std::get<2>(param);
-    // separate_key_value_in_data_block requires format_version >= 8
-    options.separate_key_value_in_data_block =
-        std::get<3>(param) && FormatVersionSupportsSeparateKeyValue(format_);
+    // separate_key_value_in_data_block
+    options.separate_key_value_in_data_block = std::get<3>(param);
     return options;
   }
 

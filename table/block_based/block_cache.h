@@ -110,7 +110,7 @@ struct BlockCreateContext : public Cache::CreateContext {
   uint8_t protection_bytes_per_key = 0;
   bool index_value_is_full;
   bool index_has_first_key;
-  // Whether blocks use separated KV storage (format_version >= 8)
+  // Whether blocks use separated KV storage
   bool use_separated_kv_storage = false;
   // Restart intervals from table properties (0 if not available)
   uint32_t data_block_restart_interval = 0;

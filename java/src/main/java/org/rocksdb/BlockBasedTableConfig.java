@@ -37,7 +37,7 @@ public class BlockBasedTableConfig extends TableFormatConfig {
     wholeKeyFiltering = true;
     verifyCompression = false;
     readAmpBytesPerBit = 0;
-    formatVersion = 8;
+    formatVersion = 7;
     separateKeyValueInDataBlock = false;
     enableIndexCompression = true;
     blockAlign = false;
@@ -771,8 +771,6 @@ public class BlockBasedTableConfig extends TableFormatConfig {
    * improve read performance at a cost of a varint per restart interval (~1 bit
    * per key by default), in addition to improving compression. Small values or
    * low block_restart_interval may prefer to set this as false.
-   * <p>
-   * Requires format_version &gt;= 8.
    * <p>
    * Default: false
    *
