@@ -23,7 +23,7 @@
  * Signature: (IIDIIBZZ)J
  */
 jlong Java_org_rocksdb_PlainTableConfig_newTableFactoryHandle(
-    JNIEnv * /*env*/, jclass /*jcls*/, jint jkey_size, jint jbloom_bits_per_key,
+    JNIEnv* /*env*/, jclass /*jcls*/, jint jkey_size, jint jbloom_bits_per_key,
     jdouble jhash_table_ratio, jint jindex_sparseness, jint jhuge_page_tlb_size,
     jbyte jencoding_type, jboolean jfull_scan_mode,
     jboolean jstore_index_in_file) {
@@ -90,8 +90,8 @@ jlong Java_org_rocksdb_BlockBasedTableConfig_newTableFactoryHandle(
     options.block_cache = nullptr;
   } else {
     if (jblock_cache_handle > 0) {
-      std::shared_ptr<ROCKSDB_NAMESPACE::Cache> *pCache =
-          reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::Cache> *>(
+      std::shared_ptr<ROCKSDB_NAMESPACE::Cache>* pCache =
+          reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::Cache>*>(
               jblock_cache_handle);
       options.block_cache = *pCache;
     } else if (jblock_cache_size >= 0) {
@@ -109,8 +109,8 @@ jlong Java_org_rocksdb_BlockBasedTableConfig_newTableFactoryHandle(
     }
   }
   if (jpersistent_cache_handle > 0) {
-    std::shared_ptr<ROCKSDB_NAMESPACE::PersistentCache> *pCache =
-        reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::PersistentCache> *>(
+    std::shared_ptr<ROCKSDB_NAMESPACE::PersistentCache>* pCache =
+        reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::PersistentCache>*>(
             jpersistent_cache_handle);
     options.persistent_cache = *pCache;
   }
@@ -125,8 +125,8 @@ jlong Java_org_rocksdb_BlockBasedTableConfig_newTableFactoryHandle(
       static_cast<bool>(joptimize_filters_for_memory);
   options.use_delta_encoding = static_cast<bool>(juse_delta_encoding);
   if (jfilter_policy_handle > 0) {
-    std::shared_ptr<ROCKSDB_NAMESPACE::FilterPolicy> *pFilterPolicy =
-        reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::FilterPolicy> *>(
+    std::shared_ptr<ROCKSDB_NAMESPACE::FilterPolicy>* pFilterPolicy =
+        reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::FilterPolicy>*>(
             jfilter_policy_handle);
     options.filter_policy = *pFilterPolicy;
   }
