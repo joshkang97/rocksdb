@@ -576,9 +576,8 @@ Status GetDecompressor(const std::string& compression_name,
                        std::shared_ptr<Decompressor>* out_decompressor) {
   if (compression_name.empty()) {
     // Very old file (before RocksDB 4.9.0) that might contain compressed
-    // blocks. Get a general decompressor for the format version.
-    auto mgr_to_use = GetBuiltinCompressionManager(
-        GetCompressFormatForVersion(table_format_version));
+    // blocks. Get a general decompressor (for all supported format_versions)
+    auto mgr_to_use = GetBuiltinV2CompressionManager();
     *out_decompressor = mgr_to_use->GetDecompressor();
     return Status::OK();
   }
@@ -664,8 +663,7 @@ Status GetDecompressor(const std::string& compression_name,
                                 compression_name);
     } else if (saved_comp_type != kNoCompression) {
       // Use built-in compression manager
-      auto mgr_to_use = GetBuiltinCompressionManager(
-          GetCompressFormatForVersion(table_format_version));
+      auto mgr_to_use = GetBuiltinV2CompressionManager();
       *out_decompressor =
           mgr_to_use->GetDecompressorOptimizeFor(saved_comp_type);
     } else {
@@ -810,7 +808,8 @@ Status BlockBasedTable::Open(
     }
     return s;
   }
-  if (!IsSupportedFormatVersion(footer.format_version()) &&
+  if (!IsSupportedFormatVersionForRead(kBlockBasedTableMagicNumber,
+                                       footer.format_version()) &&
       !TEST_AllowUnsupportedFormatVersion()) {
     return Status::Corruption(
         "Unknown Footer version. Maybe this file was created with newer "
@@ -823,13 +822,6 @@ Status BlockBasedTable::Open(
       file_size, level, immortal_table, user_defined_timestamps_persisted);
   rep->file = std::move(file);
   rep->footer = footer;
-
-  // Some ancient versions (~2.5 - 2.7, format_version=1) could compress the
-  // metaindex block, so we need to allow for that
-  if (footer.format_version() < 2) {
-    auto mgr = GetBuiltinCompressionManager(/*compression_format_version=*/1);
-    rep->decompressor = mgr->GetDecompressor();
-  }
 
   // For fully portable/stable cache keys, we need to read the properties
   // block before setting up cache keys. TODO: consider setting up a bootstrap
@@ -1706,7 +1698,8 @@ IndexBlockIter* BlockBasedTable::InitBlockIterator<IndexBlockIter>(
       rep->get_global_seqno(block_type), input_iter, rep->ioptions.stats,
       /* total_order_seek */ true, rep->index_has_first_key,
       rep->index_key_includes_seq, rep->index_value_is_full,
-      block_contents_pinned, rep->user_defined_timestamps_persisted);
+      block_contents_pinned, rep->user_defined_timestamps_persisted,
+      nullptr /* prefix_index */, rep->table_options.index_block_search_type);
 }
 
 // Right now only called for Data blocks.
