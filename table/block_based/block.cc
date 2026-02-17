@@ -1026,8 +1026,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         shared_prefix_len = left_key.difference_offset(right_key);
       }
       assert(shared_prefix_len <= left_key.size() &&
-             shared_prefix_len <= right_key.size() &&
-             shared_prefix_len <= target.size());
+             shared_prefix_len <= right_key.size());
 
       uint64_t left_val =
           ReadBe64FromKey(left_key, raw_key_.IsUserKey(), shared_prefix_len);
@@ -1062,6 +1061,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         }
       }
 
+      assert(shared_prefix_len <= target.size());
       assert(memcmp(left_key.data(), target.data(), shared_prefix_len) == 0);
       assert(memcmp(right_key.data(), target.data(), shared_prefix_len) == 0);
 

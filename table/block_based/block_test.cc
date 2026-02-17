@@ -817,21 +817,21 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary) {
   const bool kUseValueDeltaEncoding = true;
   const uint64_t kBlockSize = 50;
 
-  // Three user keys sharing prefix "ABCDEFGH" with different suffixes.
-  std::string key0 =
-      "ABCDEFGH"
-      "AAAA";
-  std::string key1 =
-      "ABCDEFGH"
-      "MMMM";
-  std::string key2 =
-      "ABCDEFGH"
-      "ZZZZ";
+  // 20 user keys sharing prefix "ABCDEFGHIJ" with evenly spaced suffixes.
+  const std::string kPrefix = "ABCDEFGHIJ";
+  const int kNumKeys = 20;
+  std::vector<std::string> keys;
+  for (int i = 0; i < kNumKeys; i++) {
+    std::string suffix = std::to_string(i);
+    suffix = std::string(3 - suffix.length(), '0') + suffix;
+    keys.push_back(kPrefix + suffix);
+  }
 
-  BlockHandle bh0(0, kBlockSize);
-  BlockHandle bh1(kBlockSize + BlockBasedTable::kBlockTrailerSize, kBlockSize);
-  BlockHandle bh2(2 * (kBlockSize + BlockBasedTable::kBlockTrailerSize),
-                  kBlockSize);
+  std::vector<BlockHandle> handles;
+  for (int i = 0; i < kNumKeys; i++) {
+    handles.emplace_back(i * (kBlockSize + BlockBasedTable::kBlockTrailerSize),
+                         kBlockSize);
+  }
 
   BlockBuilder builder(
       1 /* restart_interval */, true /* use_delta_encoding */,
@@ -839,9 +839,10 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary) {
       0.75 /* data_block_hash_table_util_ratio */, 0 /* ts_sz */,
       false /* persist_udt */, true /* is_user_key */);
 
-  AddIndexBlockEntry(builder, key0, bh0, nullptr, kIncludeFirstKey);
-  AddIndexBlockEntry(builder, key1, bh1, &bh0, kIncludeFirstKey);
-  AddIndexBlockEntry(builder, key2, bh2, &bh1, kIncludeFirstKey);
+  for (int i = 0; i < kNumKeys; i++) {
+    BlockHandle* prev = i > 0 ? &handles[i - 1] : nullptr;
+    AddIndexBlockEntry(builder, keys[i], handles[i], prev, kIncludeFirstKey);
+  }
 
   Slice rawblock = builder.Finish();
   BlockContents contents;
@@ -869,21 +870,25 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary) {
   // Case 1: target prefix < shared prefix
   iter->Seek(make_target("AAAAAA"));
   ASSERT_TRUE(iter->Valid());
-  EXPECT_EQ(iter->key(), key0);
+  EXPECT_EQ(iter->key(), keys[0]);
+
+  iter->Seek(make_target(""));
+  ASSERT_TRUE(iter->Valid());
+  EXPECT_EQ(iter->key(), keys[0]);
 
   // Case 2: target prefix > shared prefix
-  iter->Seek(make_target("ABZZZZZZ"));
+  iter->Seek(make_target("ABCDEFGHZZ"));
   ASSERT_FALSE(iter->Valid());
 
   // Case 3: target is the prefix
-  iter->Seek(make_target("ABCDEFGH"));
+  iter->Seek(make_target("ABCDEFGHIJ"));
   ASSERT_TRUE(iter->Valid());
-  EXPECT_EQ(iter->key(), key0);
+  EXPECT_EQ(iter->key(), keys[0]);
 
   // Case 4: target a subset of the prefix
-  iter->Seek(make_target("ABCDE"));
+  iter->Seek(make_target("ABCDEFG"));
   ASSERT_TRUE(iter->Valid());
-  EXPECT_EQ(iter->key(), key0);
+  EXPECT_EQ(iter->key(), keys[0]);
 }
 
 class BlockPerKVChecksumTest : public DBTestBase {
