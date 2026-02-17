@@ -156,6 +156,8 @@ struct DecodeEntryV4 {
 // with zeros on the right if the key is shorter. This preserves
 // lexicographic ordering. Non-user keys will also have end internal bytes
 // stripped and not counted for in the value.
+//
+// If s.size() >= offset, then returns 0
 static uint64_t ReadBe64FromKey(Slice s, bool is_user_key, size_t offset) {
   if (!is_user_key) {
     assert(s.size() >= kNumInternalBytes);
@@ -971,16 +973,12 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
   int64_t left = -1;
   int64_t right = num_restarts_ - 1;
-  int64_t shared_prefix_len = -1;
+  size_t shared_prefix_len = 0;
 
   Slice left_key;
   Slice right_key;
   bool seek_failed = false;
-
-#ifndef NDEBUG
-  // used to validate invariants
   bool first_iter = true;
-#endif
 
   // A poor search is when less than half the search space is reduced, because
   // binary search would do better. When there are kMaxPoorSearches in a row,
@@ -1008,7 +1006,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
       const auto usable_left = std::max<int64_t>(left, 0);
 
       // First iteration: decode both boundary keys and compute shared prefix.
-      if (shared_prefix_len < 0) {
+      if (first_iter) {
         assert(first_iter);
         if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(usable_left),
                                           &left_key)) {
@@ -1023,17 +1021,47 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         // Compute the shared prefix length between smallest index key and
         // largest index key this can be used to "normalize" the values
         // calculated during interpolation search.
-        shared_prefix_len =
-            static_cast<int64_t>(left_key.difference_offset(right_key));
+        shared_prefix_len = left_key.difference_offset(right_key);
       }
-      assert(shared_prefix_len >= 0);
+      assert(shared_prefix_len <= left_key.size() &&
+             shared_prefix_len <= right_key.size() &&
+             shared_prefix_len <= target.size());
 
-      size_t spl = static_cast<size_t>(shared_prefix_len);
-      assert(spl <= left_key.size() && spl <= right_key.size());
-      uint64_t left_val = ReadBe64FromKey(left_key, raw_key_.IsUserKey(), spl);
+      uint64_t left_val =
+          ReadBe64FromKey(left_key, raw_key_.IsUserKey(), shared_prefix_len);
       uint64_t right_val =
-          ReadBe64FromKey(right_key, raw_key_.IsUserKey(), spl);
-      uint64_t target_val = ReadBe64FromKey(target, raw_key_.IsUserKey(), spl);
+          ReadBe64FromKey(right_key, raw_key_.IsUserKey(), shared_prefix_len);
+      uint64_t target_val =
+          ReadBe64FromKey(target, raw_key_.IsUserKey(), shared_prefix_len);
+
+      if (first_iter && target_val == 0) {
+        // If target_val = 0, then it is possible that the length of target is
+        // smaller than shared_prefix_len. If this is the case, then target must
+        // fall out of the search boundaries.
+        size_t cmp_len = std::min(target.size(), shared_prefix_len);
+        int cmp = memcmp(target.data(), left_key.data(), cmp_len);
+        if (cmp < 0 || (cmp == 0 && target.size() < shared_prefix_len)) {
+#ifndef NDEBUG
+          UpdateRawKeyAndMaybePadMinTimestamp(left_key);
+          assert(CompareCurrentKey(target) >= 0);
+#endif
+          // if target size is less than shared_prefix length, and cmp == 0,
+          // then it is guaranteed <= left
+          *skip_linear_scan = true;
+          *index = static_cast<uint32_t>(usable_left);
+          return true;
+        } else if (cmp > 0) {
+#ifndef NDEBUG
+          UpdateRawKeyAndMaybePadMinTimestamp(right_key);
+          assert(CompareCurrentKey(target) < 0);
+#endif
+          *index = static_cast<uint32_t>(right);
+          return true;
+        }
+      }
+
+      assert(memcmp(left_key.data(), target.data(), shared_prefix_len) == 0);
+      assert(memcmp(right_key.data(), target.data(), shared_prefix_len) == 0);
 
       if (left_val > right_val) {
         CorruptionError("left key is greater than right key");
@@ -1071,17 +1099,21 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
       // early exit if key is not within bounds
       if (lte_left) {
+#ifndef NDEBUG
         assert(!seek_failed);
         UpdateRawKeyAndMaybePadMinTimestamp(left_key);
         assert(CompareCurrentKey(target) >= 0);
+#endif
         *skip_linear_scan = true;
         *index = static_cast<uint32_t>(usable_left);
         return true;
       }
       if (gt_right) {
+#ifndef NDEBUG
         assert(!seek_failed);
         UpdateRawKeyAndMaybePadMinTimestamp(right_key);
         assert(CompareCurrentKey(target) < 0);
+#endif
         *index = static_cast<uint32_t>(right);
         return true;
       }
