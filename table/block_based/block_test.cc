@@ -830,6 +830,7 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary) {
   }
 
   std::vector<BlockHandle> handles;
+  handles.reserve(kNumKeys);
   for (int i = 0; i < kNumKeys; i++) {
     handles.emplace_back(i * (kBlockSize + BlockBasedTable::kBlockTrailerSize),
                          kBlockSize);
@@ -913,6 +914,7 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary2) {
   }
 
   std::vector<BlockHandle> handles;
+  handles.reserve(kNumKeys);
   for (int i = 0; i < kNumKeys; i++) {
     handles.emplace_back(i * (kBlockSize + BlockBasedTable::kBlockTrailerSize),
                          kBlockSize);
