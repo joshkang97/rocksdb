@@ -80,9 +80,9 @@ Status DataBlockFooter::DecodeFrom(Slice* input) {
       return Status::Corruption(
           "Block too small for separated KV values section offset");
     }
-    const char* offset_ptr =
-        input->data() + input->size() - sizeof(uint32_t);
-    values_section_offset = DecodeFixed32(offset_ptr);
+    // values_section_offset is at the end of input (just before packed word)
+    values_section_offset =
+        DecodeFixed32(input->data() + input->size() - sizeof(uint32_t));
     input->remove_suffix(sizeof(uint32_t));
   }
 

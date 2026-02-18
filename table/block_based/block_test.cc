@@ -625,6 +625,8 @@ class IndexBlockTest
   }
   int indexBlockRestartInterval() const { return std::get<7>(GetParam()); }
   int keyLength() const { return std::get<8>(GetParam()); }
+  // prefix_length and key_distribution are bundled into a std::pair to stay
+  // within gtest 1.8.1's 10-parameter Combine limit.
   int prefixLength() const { return std::get<9>(GetParam()).first; }
   KeyDistribution keyDistribution() const {
     return std::get<9>(GetParam()).second;
