@@ -86,7 +86,6 @@ struct BlockCreateContext : public Cache::CreateContext {
                      const Comparator* _raw_ucmp,
                      bool _index_value_is_full = false,
                      bool _index_has_first_key = false,
-                     bool _use_separated_kv_storage = false,
                      uint32_t _data_block_restart_interval = 0,
                      uint32_t _index_block_restart_interval = 0)
       : table_options(_table_options),
@@ -97,7 +96,6 @@ struct BlockCreateContext : public Cache::CreateContext {
         protection_bytes_per_key(_protection_bytes_per_key),
         index_value_is_full(_index_value_is_full),
         index_has_first_key(_index_has_first_key),
-        use_separated_kv_storage(_use_separated_kv_storage),
         data_block_restart_interval(_data_block_restart_interval),
         index_block_restart_interval(_index_block_restart_interval) {}
 
@@ -110,8 +108,6 @@ struct BlockCreateContext : public Cache::CreateContext {
   uint8_t protection_bytes_per_key = 0;
   bool index_value_is_full;
   bool index_has_first_key;
-  // Whether blocks use separated KV storage
-  bool use_separated_kv_storage = false;
   // Restart intervals from table properties (0 if not available)
   uint32_t data_block_restart_interval = 0;
   uint32_t index_block_restart_interval = 0;

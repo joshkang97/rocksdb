@@ -1072,7 +1072,6 @@ struct BlockBasedTableBuilder::Rep {
                        !use_delta_encoding_for_index_values,
                        table_opt.index_type ==
                            BlockBasedTableOptions::kBinarySearchWithFirstKey,
-                       table_options.separate_key_value_in_data_block,
                        table_options.block_restart_interval,
                        table_options.index_block_restart_interval),
         tail_size(0) {
@@ -2569,9 +2568,6 @@ void BlockBasedTableBuilder::WriteFooter(BlockHandle& metaindex_block_handle,
                                          BlockHandle& index_block_handle) {
   assert(LIKELY(ok()));
   Rep* r = rep_.get();
-  // this is guaranteed by BlockBasedTableBuilder's constructor
-  assert(r->table_options.checksum == kCRC32c ||
-         r->table_options.format_version != 0);
   FooterBuilder footer;
   Status s = footer.Build(kBlockBasedTableMagicNumber,
                           r->table_options.format_version, r->get_offset(),
@@ -2712,7 +2708,6 @@ void BlockBasedTableBuilder::MaybeEnterUnbuffered(
     Block reader{
         BlockContents{data_block}, 0 /* read_amp_bytes_per_bit */,
         nullptr /* statistics */,
-        r->table_options.separate_key_value_in_data_block,
         static_cast<uint32_t>(r->table_options.block_restart_interval)};
     DataBlockIter* iter = reader.NewDataIterator(
         r->internal_comparator.user_comparator(), kDisableGlobalSequenceNumber,

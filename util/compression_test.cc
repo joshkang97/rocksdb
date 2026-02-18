@@ -1120,17 +1120,15 @@ static Status ValidateRocksBlock(Slice data, bool use_separated_kv,
   const char* const block_type_str =
       kIndexBlockV4 ? "Index block" : "Data block";
 
-  // Minimum RocksDB block content size: at least 1 entry + restarts
-  size_t footer_size = use_separated_kv ? 8 : 4;
-  if (srcSize < footer_size + 4) {  // footer + at least one restart
+  // Decode footer using DataBlockFooter
+  Slice input(src, srcSize);
+  DataBlockFooter footer;
+  Status s = footer.DecodeFrom(&input);
+  if (!s.ok()) {
     return Status::Corruption(std::string(block_type_str) + " too small");
   }
 
-  BlockBasedTableOptions::DataBlockIndexType index_type;
-  uint32_t numRestarts;
-
-  UnPackIndexTypeAndNumRestarts(DecodeFixed32(src + srcSize - sizeof(uint32_t)),
-                                &index_type, &numRestarts);
+  uint32_t numRestarts = footer.num_restarts;
 
   // Sanity check: num_restarts should be reasonable
   // TODO: also support data block hash index
@@ -1139,19 +1137,19 @@ static Status ValidateRocksBlock(Slice data, bool use_separated_kv,
                               block_type_str);
   }
 
-  size_t restartsSize = numRestarts * sizeof(uint32_t) + footer_size;
-  if (srcSize < restartsSize) {
+  size_t restartsSize = numRestarts * sizeof(uint32_t);
+  if (input.size() < restartsSize) {
     return Status::Corruption(std::string(block_type_str) +
                               " too small for restarts array");
   }
 
   size_t entriesSize;
   uint32_t values_section_offset = 0;
-  if (use_separated_kv) {
-    values_section_offset = DecodeFixed32(src + srcSize - 2 * sizeof(uint32_t));
+  if (footer.separated_kv) {
+    values_section_offset = footer.values_section_offset;
     entriesSize = values_section_offset;  // keys section ends at value_offset
   } else {
-    entriesSize = srcSize - restartsSize;
+    entriesSize = input.size() - restartsSize;
   }
   const char* entriesEnd = src + entriesSize;
 
