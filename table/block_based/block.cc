@@ -154,15 +154,10 @@ struct DecodeEntryV4 {
 
 // Read first 8 bytes (starting at offset) as big-endian uint64_t, padding
 // with zeros on the right if the key is shorter. This preserves
-// lexicographic ordering. Non-user keys will also have end internal bytes
-// stripped and not counted for in the value.
+// lexicographic ordering.
 //
-// If s.size() >= offset, then returns 0
-static uint64_t ReadBe64FromKey(Slice s, bool is_user_key, size_t offset) {
-  if (!is_user_key) {
-    assert(s.size() >= kNumInternalBytes);
-    s = Slice(s.data(), s.size() - kNumInternalBytes);
-  }
+// If s.size() >= offset, then returns 0.
+static uint64_t ReadBe64(const Slice& s, size_t offset) {
   uint64_t val = 0;
   offset = std::min(offset, s.size());
   size_t len = std::min(s.size() - offset, size_t{8});
@@ -979,6 +974,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
   Slice left_key;
   Slice right_key;
+  Slice left_user_key;
+  Slice right_user_key;
   bool seek_failed = false;
   bool first_iter = true;
 
@@ -993,6 +990,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
   //
   // The first iteration is used as an early optimization to determine initial
   // bounds, and whether target is within those bounds
+  const Slice target_user_key =
+      raw_key_.IsUserKey() ? target : ExtractUserKey(target);
   while (left != right) {
     int64_t mid = 0;
 
@@ -1009,7 +1008,6 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
 
       // First iteration: decode both boundary keys and compute shared prefix.
       if (first_iter) {
-        assert(first_iter);
         if (!GetRestartKey<DecodeKeyFunc>(static_cast<uint32_t>(usable_left),
                                           &left_key)) {
           return false;
@@ -1020,28 +1018,35 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
           return false;
         }
 
-        // Compute the shared prefix length between smallest index key and
-        // largest index key this can be used to "normalize" the values
-        // calculated during interpolation search.
-        shared_prefix_len = left_key.difference_offset(right_key);
+        // Compute the shared prefix length between the user key portions of
+        // the boundary keys. This is used to "normalize" the values calculated
+        // during interpolation search.
+        left_user_key =
+            raw_key_.IsUserKey() ? left_key : ExtractUserKey(left_key);
+        right_user_key =
+            raw_key_.IsUserKey() ? right_key : ExtractUserKey(right_key);
+        shared_prefix_len = left_user_key.difference_offset(right_user_key);
       }
-      assert(shared_prefix_len <= left_key.size() &&
-             shared_prefix_len <= right_key.size());
 
-      uint64_t left_val =
-          ReadBe64FromKey(left_key, raw_key_.IsUserKey(), shared_prefix_len);
-      uint64_t right_val =
-          ReadBe64FromKey(right_key, raw_key_.IsUserKey(), shared_prefix_len);
-      uint64_t target_val =
-          ReadBe64FromKey(target, raw_key_.IsUserKey(), shared_prefix_len);
+      assert(shared_prefix_len <= left_user_key.size() &&
+             shared_prefix_len <= right_user_key.size());
+      assert(left_user_key.data() == left_key.data() &&
+             left_user_key.size() <= left_key.size());
+      assert(right_user_key.data() == right_key.data() &&
+             right_user_key.size() <= right_key.size());
+
+      uint64_t left_val = ReadBe64(left_user_key, shared_prefix_len);
+      uint64_t right_val = ReadBe64(right_user_key, shared_prefix_len);
+      uint64_t target_val = ReadBe64(target_user_key, shared_prefix_len);
 
       if (first_iter && target_val == 0) {
         // If target_val = 0, then it is possible that the length of target is
         // smaller than shared_prefix_len. If this is the case, then target must
         // fall out of the search boundaries.
-        size_t cmp_len = std::min(target.size(), shared_prefix_len);
-        int cmp = memcmp(target.data(), left_key.data(), cmp_len);
-        if (cmp < 0 || (cmp == 0 && target.size() < shared_prefix_len)) {
+        size_t cmp_len = std::min(target_user_key.size(), shared_prefix_len);
+        int cmp = memcmp(target_user_key.data(), left_user_key.data(), cmp_len);
+        if (cmp < 0 ||
+            (cmp == 0 && target_user_key.size() < shared_prefix_len)) {
 #ifndef NDEBUG
           UpdateRawKeyAndMaybePadMinTimestamp(left_key);
           assert(CompareCurrentKey(target) >= 0);
@@ -1061,9 +1066,11 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         }
       }
 
-      assert(shared_prefix_len <= target.size());
-      assert(memcmp(left_key.data(), target.data(), shared_prefix_len) == 0);
-      assert(memcmp(right_key.data(), target.data(), shared_prefix_len) == 0);
+      assert(shared_prefix_len <= target_user_key.size());
+      assert(memcmp(left_user_key.data(), target_user_key.data(),
+                    shared_prefix_len) == 0);
+      assert(memcmp(right_user_key.data(), target_user_key.data(),
+                    shared_prefix_len) == 0);
 
       if (left_val > right_val) {
         CorruptionError("left key is greater than right key");
@@ -1079,7 +1086,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
         lte_left = true;
       } else if (target_val == left_val) {
         // target_val == left_val doesn't imply target == left_key
-        // because ReadBe64FromKey only reads 8 bytes and skips sequence
+        // because ReadBe64 only reads 8 bytes and skips sequence
         // numbers. We need to check actual key order.
         if (CompareKey(left_key, target) >= 0) {
           assert(first_iter);
@@ -1164,6 +1171,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
     if (cmp < 0) {
       left = mid;
       left_key = mid_key;
+      left_user_key =
+          raw_key_.IsUserKey() ? left_key : ExtractUserKey(left_key);
     } else if (cmp > 0) {
       right = mid - 1;
       if (!seek_failed && left != right) {
@@ -1171,6 +1180,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
                                           &right_key)) {
           return false;
         }
+        right_user_key =
+            raw_key_.IsUserKey() ? right_key : ExtractUserKey(right_key);
       }
     } else {
       *skip_linear_scan = true;
