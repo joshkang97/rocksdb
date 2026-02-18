@@ -1612,13 +1612,12 @@ IndexBlockIter* Block::NewIndexIterator(
   } else {
     BlockPrefixIndex* prefix_index_ptr =
         total_order_seek ? nullptr : prefix_index;
-    ret_iter->Initialize(raw_ucmp, data(), restart_offset_, num_restarts_,
-                         global_seqno, prefix_index_ptr, have_first_key,
-                         key_includes_seq, value_is_full, block_contents_pinned,
-                         user_defined_timestamps_persisted,
-                         protection_bytes_per_key_, kv_checksum_,
-                         block_restart_interval_, values_section_,
-                         index_block_search_type);
+    ret_iter->Initialize(
+        raw_ucmp, data(), restart_offset_, num_restarts_, global_seqno,
+        prefix_index_ptr, have_first_key, key_includes_seq, value_is_full,
+        block_contents_pinned, user_defined_timestamps_persisted,
+        protection_bytes_per_key_, kv_checksum_, block_restart_interval_,
+        values_section_, index_block_search_type);
   }
 
   return ret_iter;

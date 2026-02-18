@@ -67,8 +67,8 @@ public class BlockBasedTableConfig extends TableFormatConfig {
       final boolean separateKeyValueInDataBlock, final boolean enableIndexCompression,
       final boolean blockAlign, final long superBlockAlignmentSize,
       final long superBlockAlignmentSpaceOverheadRatio, final byte indexShortening,
-      final byte indexSearchType, final byte filterPolicyType,
-      final long filterPolicyHandle, final double filterPolicyConfigValue) {
+      final byte indexSearchType, final byte filterPolicyType, final long filterPolicyHandle,
+      final double filterPolicyConfigValue) {
     this.cacheIndexAndFilterBlocks = cacheIndexAndFilterBlocks;
     this.cacheIndexAndFilterBlocksWithHighPriority = cacheIndexAndFilterBlocksWithHighPriority;
     this.pinL0FilterAndIndexBlocksInCache = pinL0FilterAndIndexBlocksInCache;

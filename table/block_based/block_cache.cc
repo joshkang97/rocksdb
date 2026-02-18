@@ -11,9 +11,9 @@ namespace ROCKSDB_NAMESPACE {
 
 void BlockCreateContext::Create(std::unique_ptr<Block_kData>* parsed_out,
                                 BlockContents&& block) {
-  parsed_out->reset(new Block_kData(
-      std::move(block), table_options->read_amp_bytes_per_bit, statistics,
-      data_block_restart_interval));
+  parsed_out->reset(new Block_kData(std::move(block),
+                                    table_options->read_amp_bytes_per_bit,
+                                    statistics, data_block_restart_interval));
   parsed_out->get()->InitializeDataBlockProtectionInfo(protection_bytes_per_key,
                                                        raw_ucmp);
 }

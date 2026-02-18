@@ -9237,8 +9237,8 @@ class BlockBasedTableOptionsJni
       return nullptr;
     }
 
-    jmethodID method_id_init =
-        env->GetMethodID(jclazz, "<init>", "(ZZZZBBDBZJIIIJZZZZZIIZZZJJBBBJD)V");
+    jmethodID method_id_init = env->GetMethodID(
+        jclazz, "<init>", "(ZZZZBBDBZJIIIJZZZZZIIZZZJJBBBJD)V");
     if (method_id_init == nullptr) {
       // exception thrown: NoSuchMethodException or OutOfMemoryError
       return nullptr;

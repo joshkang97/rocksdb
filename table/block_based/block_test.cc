@@ -599,8 +599,7 @@ enum class KeyDistribution { kUniform, kNonUniform };
 class IndexBlockTest
     : public testing::Test,
       public testing::WithParamInterface<
-          std::tuple<bool, bool, bool, bool,
-                     test::UserDefinedTimestampTestMode,
+          std::tuple<bool, bool, bool, bool, test::UserDefinedTimestampTestMode,
                      BlockBasedTableOptions::BlockSearchType, int, int, int,
                      std::pair<int, KeyDistribution>>> {
  public:
@@ -698,12 +697,11 @@ TEST_P(IndexBlockTest, IndexValueEncodingTest) {
   std::vector<BlockHandle> block_handles;
   std::vector<std::string> first_keys;
   const bool kUseDeltaEncoding = true;
-  BlockBuilder builder(indexBlockRestartInterval(), kUseDeltaEncoding,
-                       useValueDeltaEncoding(),
-                       BlockBasedTableOptions::kDataBlockBinarySearch,
-                       0.75 /* data_block_hash_table_util_ratio */, ts_sz,
-                       shouldPersistUDT(), !keyIncludesSeq(),
-                       useSeparatedKVStorage());
+  BlockBuilder builder(
+      indexBlockRestartInterval(), kUseDeltaEncoding, useValueDeltaEncoding(),
+      BlockBasedTableOptions::kDataBlockBinarySearch,
+      0.75 /* data_block_hash_table_util_ratio */, ts_sz, shouldPersistUDT(),
+      !keyIncludesSeq(), useSeparatedKVStorage());
 
   int num_records = numRecords();
 
@@ -823,19 +821,17 @@ INSTANTIATE_TEST_CASE_P(
     P, IndexBlockTest,
     ::testing::Combine(
         ::testing::Bool(), ::testing::Bool(), ::testing::Bool(),
-        ::testing::Bool(),
-        ::testing::ValuesIn(test::GetUDTTestModes()),
+        ::testing::Bool(), ::testing::ValuesIn(test::GetUDTTestModes()),
         ::testing::Values(
             BlockBasedTableOptions::BlockSearchType::kBinary,
             BlockBasedTableOptions::BlockSearchType::kInterpolation),
         ::testing::Values(1, 100),    // num_records
         ::testing::Values(1, 16),     // index_block_restart_interval
         ::testing::Values(1, 8, 12),  // key_length
-        ::testing::Values(
-            std::make_pair(0, KeyDistribution::kUniform),
-            std::make_pair(0, KeyDistribution::kNonUniform),
-            std::make_pair(50, KeyDistribution::kUniform),
-            std::make_pair(50, KeyDistribution::kNonUniform))));
+        ::testing::Values(std::make_pair(0, KeyDistribution::kUniform),
+                          std::make_pair(0, KeyDistribution::kNonUniform),
+                          std::make_pair(50, KeyDistribution::kUniform),
+                          std::make_pair(50, KeyDistribution::kNonUniform))));
 
 class BlockPerKVChecksumTest : public DBTestBase {
  public:
