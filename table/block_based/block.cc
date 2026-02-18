@@ -1039,10 +1039,10 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
       uint64_t right_val = ReadBe64(right_user_key, shared_prefix_len);
       uint64_t target_val = ReadBe64(target_user_key, shared_prefix_len);
 
-      if (first_iter && target_val == 0) {
-        // If target_val = 0, then it is possible that the length of target is
-        // smaller than shared_prefix_len. If this is the case, then target must
-        // fall out of the search boundaries.
+      if (first_iter && shared_prefix_len > 0) {
+        // It is not guaranteed that the shared_prefix of the left and right
+        // boundaries is a valid prefix of the target. If it is not, then we can
+        // early exit.
         size_t cmp_len = std::min(target_user_key.size(), shared_prefix_len);
         int cmp = memcmp(target_user_key.data(), left_user_key.data(), cmp_len);
         if (cmp < 0 ||

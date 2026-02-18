@@ -821,10 +821,12 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary) {
   const std::string kPrefix = "ABCDEFGHIJ";
   const int kNumKeys = 20;
   std::vector<std::string> keys;
+  keys.reserve(kNumKeys);
   for (int i = 0; i < kNumKeys; i++) {
     std::string suffix = std::to_string(i);
-    suffix = std::string(3 - suffix.length(), '0') + suffix;
-    keys.push_back(kPrefix + suffix);
+    char formatted_suffix[4];
+    snprintf(formatted_suffix, sizeof(formatted_suffix), "%03d", i);
+    keys.push_back(kPrefix + formatted_suffix);
   }
 
   std::vector<BlockHandle> handles;
@@ -889,6 +891,102 @@ TEST(IndexBlockTest, InterpolationSearchPrefixBoundary) {
   iter->Seek(make_target("ABCDEFG"));
   ASSERT_TRUE(iter->Valid());
   EXPECT_EQ(iter->key(), keys[0]);
+}
+
+// Like the above test, but extend the shared prefix into internal bytes
+TEST(IndexBlockTest, InterpolationSearchPrefixBoundary2) {
+  const bool kIncludeFirstKey = false;
+  const bool kUseValueDeltaEncoding = true;
+  const uint64_t kBlockSize = 50;
+
+  // 20 internal keys with the same user key but decreasing sequence numbers
+  // (which is ascending InternalKeyComparator order).
+  const std::string kUserKey = "ABCDEFGHIJ";
+  const int kNumKeys = 20;
+  std::vector<std::string> keys;
+  keys.reserve(kNumKeys);
+  for (int i = 0; i < kNumKeys; i++) {
+    std::string ikey = kUserKey;
+    SequenceNumber seq = static_cast<SequenceNumber>(kNumKeys - i);
+    AppendInternalKeyFooter(&ikey, seq, kTypeValue);
+    keys.push_back(ikey);
+  }
+
+  std::vector<BlockHandle> handles;
+  for (int i = 0; i < kNumKeys; i++) {
+    handles.emplace_back(i * (kBlockSize + BlockBasedTable::kBlockTrailerSize),
+                         kBlockSize);
+  }
+
+  BlockBuilder builder(
+      1 /* restart_interval */, true /* use_delta_encoding */,
+      kUseValueDeltaEncoding, BlockBasedTableOptions::kDataBlockBinarySearch,
+      0.75 /* data_block_hash_table_util_ratio */, 0 /* ts_sz */,
+      false /* persist_udt */, false /* is_user_key */);
+
+  for (int i = 0; i < kNumKeys; i++) {
+    BlockHandle* prev = i > 0 ? &handles[i - 1] : nullptr;
+    AddIndexBlockEntry(builder, keys[i], handles[i], prev, kIncludeFirstKey);
+  }
+
+  Slice rawblock = builder.Finish();
+  BlockContents contents;
+  contents.data = rawblock;
+  Block reader(std::move(contents));
+
+  auto make_target = [&](const std::string& user_key,
+                         SequenceNumber seq = kMaxSequenceNumber) {
+    std::string target = user_key;
+    AppendInternalKeyFooter(&target, seq, kTypeValue);
+    return target;
+  };
+
+  std::unique_ptr<InternalIteratorBase<IndexValue>> iter(
+      reader.NewIndexIterator(
+          BytewiseComparator(), kDisableGlobalSequenceNumber,
+          nullptr /* iter */, nullptr /* stats */, true /* total_order_seek */,
+          kIncludeFirstKey, true /* key_includes_seq */,
+          !kUseValueDeltaEncoding /* value_is_full */,
+          false /* block_contents_pinned */,
+          true /* user_defined_timestamps_persisted */,
+          nullptr /* prefix_index */,
+          BlockBasedTableOptions::BlockSearchType::kInterpolation));
+
+  // Seek to each existing sequence number
+  for (int i = 0; i < kNumKeys; i++) {
+    SequenceNumber seq = static_cast<SequenceNumber>(kNumKeys - i);
+    iter->Seek(make_target(kUserKey, seq));
+    ASSERT_TRUE(iter->Valid());
+    EXPECT_EQ(iter->key(), keys[i]);
+  }
+
+  // Case 1: target prefix < shared prefix
+  iter->Seek(make_target("AAAAAA"));
+  ASSERT_TRUE(iter->Valid());
+  EXPECT_EQ(iter->key(), keys[0]);
+
+  iter->Seek(make_target(""));
+  ASSERT_TRUE(iter->Valid());
+  EXPECT_EQ(iter->key(), keys[0]);
+
+  // Case 2: target prefix > shared prefix
+  iter->Seek(make_target("ABCDEFGHZZ"));
+  ASSERT_FALSE(iter->Valid());
+
+  // Case 3: target has the same user key with kMaxSequenceNumber
+  iter->Seek(make_target("ABCDEFGHIJ"));
+  ASSERT_TRUE(iter->Valid());
+  EXPECT_EQ(iter->key(), keys[0]);
+
+  // Case 4: target a subset of the prefix
+  iter->Seek(make_target("ABCDEFG"));
+  ASSERT_TRUE(iter->Valid());
+  EXPECT_EQ(iter->key(), keys[0]);
+
+  // Case 5: target key is a prefix that also extends into the internal bytes
+  // footer
+  iter->Seek(make_target("ABCDEFGHIJ" + std::string(1, kTypeValue)));
+  ASSERT_FALSE(iter->Valid());
 }
 
 class BlockPerKVChecksumTest : public DBTestBase {
