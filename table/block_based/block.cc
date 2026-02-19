@@ -982,6 +982,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
   }
 
   *skip_linear_scan = false;
+  // Currently it is assumed that comparator is always bytewise comparator, but
+  // it may also be useful to to generalize to reverse bytewise in the future.
   assert(icmp_.user_comparator() == BytewiseComparator());
 
   int64_t left = -1;
@@ -1009,7 +1011,7 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
   // - left < mid <= right, and arr[left] < target < arr[right + 1]
   //
   // The first iteration is used as an early optimization to determine initial
-  // bounds, and whether target is within those bounds
+  // bounds, and whether target is within those bounds.
   const bool is_user_key = raw_key_.IsUserKey();
   const Slice target_user_key = is_user_key ? target : ExtractUserKey(target);
   while (left != right) {
@@ -1046,7 +1048,8 @@ bool BlockIter<TValue>::InterpolationSeekRestartPointIndex(
           // Ensure shared_user_prefix_len is only limited to user key. Suppose
           // that the shared prefix of both keys are extended into the internal
           // footer. If they are not the same user keys, then it is guaranteed
-          // left is the shorter one due to bytewise comparator.
+          // left is the shorter one due to bytewise comparator. For reverse
+          // bytewise, this would be flipped.
           shared_user_prefix_len = std::min<size_t>(
               shared_user_prefix_len, left_key.size() - kNumInternalBytes);
           assert(shared_user_prefix_len <=
