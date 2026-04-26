@@ -484,8 +484,7 @@ default_params = {
     "auto_refresh_iterator_with_snapshot": lambda: random.choice([0, 1]),
     "memtable_op_scan_flush_trigger": lambda: random.choice([0, 10, 100, 1000]),
     "memtable_avg_op_scan_flush_trigger": lambda: random.choice([0, 2, 20, 200]),
-    # TODO(jkangs): Stabilize range tombstone conversions
-    "min_tombstones_for_range_conversion": 0,  # lambda: random.choice([0, 2, 2, 4, 16]),
+    "min_tombstones_for_range_conversion": lambda: random.choice([0, 2, 2, 4, 16]),
     "ingest_wbwi_one_in": lambda: random.choice([0, 0, 100, 500]),
     "universal_reduce_file_locking": lambda: random.randint(0, 1),
     "compression_manager": lambda: random.choice(
@@ -1511,6 +1510,7 @@ def finalize_and_sanitize(src_params):
         dest_params["async_io"] = 0
         dest_params["delpercent"] += dest_params["delrangepercent"]
         dest_params["delrangepercent"] = 0
+        dest_params["min_tombstones_for_range_conversion"] = 0
         dest_params["prefix_size"] = -1
         dest_params["iterpercent"] += dest_params["prefixpercent"]
         dest_params["prefixpercent"] = 0
